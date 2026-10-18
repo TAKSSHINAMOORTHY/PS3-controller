@@ -19,6 +19,13 @@
 - Consequence: Benchmark actual latency and CPU/network use before finalizing update rate.
 
 ## D-004 — Virtual gamepad backend
-- Status: UNDECIDED
-- Candidates must be evaluated for a supported programmatic input API, macOS version, Apple Silicon, RPCS3/SDL recognition, license, maintenance, and installation/security requirements.
-- Do not infer input injection capability from the fact that a driver can enumerate virtual controllers.
+- Status: Accepted
+- Decision: Use the local virtual gamepad backend interface (`GamepadBackend`), backed by the pre-authorized DriverKit virtual device extension (`com.coreorbits.gamerpad.macos`) via its local WebSocket API (`127.0.0.1:8080`).
+- Candidates Evaluated:
+  1. `IOHIDUserDeviceCreateWithProperties` / `CoreHID.HIDVirtualDevice`: Evaluated and rejected for direct standalone userspace execution on macOS 27 because the kernel returns `kIOReturnBadArgument (0xe00002c2)` unless the app holds Apple's restricted `com.apple.developer.hid.virtual.device` entitlement.
+  2. `OpenJoystickDriver`: Not installed, requires manual system extension approvals, and primarily acts as a physical-to-virtual remapper.
+  3. `CoreOrbits GamerPad` DriverKit extension: Pre-installed and activated on user's Mac. Verified in Phase 1 spike to expose genuine `IOHIDUserDevice`, enumerate as joystick in RPCS3's bundled `libSDL3.0.dylib`, receive digital button presses/releases, and process continuous analog joystick coordinates.
+- Consequence:
+  - The Mac Companion app implements an abstract `GamepadBackend` protocol.
+  - The concrete adapter bridges received Android state snapshots to the verified virtual gamepad daemon, keeping the architecture modular and driver-agnostic.
+  - Phase 1 compatibility gate is PASSED. Proceeding to Phase 2.
