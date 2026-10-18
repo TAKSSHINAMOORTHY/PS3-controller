@@ -1,0 +1,62 @@
+package com.antigravity.ps3controller.math
+
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.sign
+
+object TouchInputMapper {
+
+    data class StickResult(
+        val x: Float,
+        val y: Float
+    )
+
+    /**
+     * Map a raw touch delta (dx, dy) within a bounding radius to normalized [-1.0, 1.0] joystick coordinates.
+     *
+     * @param dx Raw touch horizontal displacement from center in pixels.
+     * @param dy Raw touch vertical displacement from center in pixels.
+     * @param maxRadius Maximum visual travel radius of the joystick in pixels.
+     * @param deadZone Normalized dead zone threshold [0.0, 0.5] below which input is 0.
+     * @param sensitivity Response curve exponent (1.0 = linear, >1.0 = finer center control).
+     */
+    fun mapStick(
+        dx: Float,
+        dy: Float,
+        maxRadius: Float,
+        deadZone: Float = 0.05f,
+        sensitivity: Float = 1.0f
+    ): StickResult {
+        if (maxRadius <= 0f) return StickResult(0f, 0f)
+
+        // Raw normalized radius in [0, inf)
+        val rawDist = hypot(dx, dy)
+        val normalizedDist = min(rawDist / maxRadius, 1.0f)
+
+        if (normalizedDist <= deadZone) {
+            return StickResult(0f, 0f)
+        }
+
+        // Rescale range (deadZone..1.0] -> (0.0..1.0]
+        val adjustedDist = (normalizedDist - deadZone) / (1.0f - deadZone)
+        val curvedDist = adjustedDist.pow(sensitivity)
+
+        // Unit vector along drag direction
+        val unitX = dx / rawDist
+        val unitY = dy / rawDist
+
+        val mappedX = (unitX * curvedDist).coerceIn(-1.0f, 1.0f)
+        val mappedY = (unitY * curvedDist).coerceIn(-1.0f, 1.0f)
+
+        return StickResult(mappedX, mappedY)
+    }
+
+    /**
+     * Clamps a trigger value to [0.0, 1.0].
+     */
+    fun mapTrigger(value: Float): Float {
+        return value.coerceIn(0f, 1f)
+    }
+}

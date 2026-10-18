@@ -1,0 +1,186 @@
+package com.antigravity.ps3controller.network
+
+import com.antigravity.ps3controller.model.ControllerState
+import com.antigravity.ps3controller.model.HeartbeatMessage
+import com.antigravity.ps3controller.model.PairRequest
+import com.antigravity.ps3controller.model.PairResponse
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+enum class ConnectionStatus {
+    DISCONNECTED,
+    CONNECTING,
+    PAIRING,
+    CONNECTED,
+    ERROR
+}
+
+class GamepadClient(
+    val serverHost: String,
+    val serverPort: Int,
+    private val clientName: String = "Android PS3 Gamepad"
+) {
+    private val json = Json {
+        encodeDefaults = true
+        ignoreUnknownKeys = true
+    }
+    private val scope = CoroutineScope(Dispatchers.IO + Job())
+
+    private val _status = MutableStateFlow(ConnectionStatus.DISCONNECTED)
+    val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    private var activeSessionId: String? = null
+    private val sequenceNumber = AtomicLong(0)
+    private var webSocket: WebSocket? = null
+    private var heartbeatJob: Job? = null
+    private var lastSentTime = 0L
+
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(2, TimeUnit.SECONDS)
+        .build()
+
+    fun connect() {
+        if (_status.value == ConnectionStatus.CONNECTING || _status.value == ConnectionStatus.CONNECTED) {
+            return
+        }
+
+        _status.value = ConnectionStatus.CONNECTING
+        _errorMessage.value = null
+
+        val url = "ws://$serverHost:$serverPort"
+        val request = Request.Builder().url(url).build()
+
+        webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                _status.value = ConnectionStatus.PAIRING
+                // Send pair request
+                val pairReq = PairRequest(
+                    clientName = clientName,
+                    clientId = "android-${System.currentTimeMillis() % 10000}",
+                    protocolVersion = 1,
+                    pairingCode = "1234"
+                )
+                webSocket.send(json.encodeToString(pairReq))
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                handleIncomingMessage(text)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                handleDisconnect("Closed: $reason ($code)")
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                handleDisconnect("Failed: ${t.localizedMessage ?: "Unknown error"}")
+            }
+        })
+    }
+
+    private fun handleIncomingMessage(text: String) {
+        try {
+            if (text.contains("pair_response")) {
+                val response = json.decodeFromString<PairResponse>(text)
+                if (response.status == "accepted" && response.sessionId != null) {
+                    activeSessionId = response.sessionId
+                    _status.value = ConnectionStatus.CONNECTED
+                    startHeartbeat()
+                } else {
+                    _status.value = ConnectionStatus.ERROR
+                    _errorMessage.value = response.error ?: "Pairing rejected by host"
+                    webSocket?.close(1000, "Rejected")
+                }
+            }
+        } catch (e: Exception) {
+            _errorMessage.value = "Parse error: ${e.message}"
+        }
+    }
+
+    fun sendState(state: ControllerState) {
+        val ws = webSocket ?: return
+        val session = activeSessionId ?: return
+        if (_status.value != ConnectionStatus.CONNECTED) return
+
+        val now = System.currentTimeMillis()
+        // Rate limit to ~60 Hz (16ms)
+        if (now - lastSentTime < 16) {
+            return
+        }
+        lastSentTime = now
+
+        val seq = sequenceNumber.incrementAndGet()
+        val outbound = state.copy(sessionId = session, seq = seq, timestamp = now)
+        try {
+            val payload = json.encodeToString(outbound)
+            ws.send(payload)
+        } catch (_: Exception) {}
+    }
+
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch {
+            while (isActive && _status.value == ConnectionStatus.CONNECTED) {
+                delay(500)
+                val session = activeSessionId ?: continue
+                val ws = webSocket ?: continue
+                val now = System.currentTimeMillis()
+                if (now - lastSentTime >= 400) {
+                    val seq = sequenceNumber.incrementAndGet()
+                    val hb = HeartbeatMessage(sessionId = session, seq = seq, timestamp = now)
+                    try {
+                        ws.send(json.encodeToString(hb))
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    private fun handleDisconnect(reason: String) {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        activeSessionId = null
+        _status.value = ConnectionStatus.DISCONNECTED
+        _errorMessage.value = reason
+        webSocket = null
+    }
+
+    fun disconnect() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+
+        // Send a neutral state packet before closing
+        val session = activeSessionId
+        val ws = webSocket
+        if (session != null && ws != null) {
+            val seq = sequenceNumber.incrementAndGet()
+            val neutral = ControllerState.neutral(sessionId = session, seq = seq)
+            try {
+                ws.send(json.encodeToString(neutral))
+            } catch (_: Exception) {}
+        }
+
+        ws?.close(1000, "User disconnected")
+        handleDisconnect("User initiated disconnect")
+    }
+}
