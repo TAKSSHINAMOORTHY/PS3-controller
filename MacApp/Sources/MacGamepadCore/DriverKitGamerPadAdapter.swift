@@ -44,23 +44,15 @@ public final class DriverKitGamerPadAdapter: GamepadBackend, @unchecked Sendable
         // Receive server_info or connected ack
         _ = try await task.receive()
 
-        // Send controller_info with compact button mapping
+        // Send compact controller_info with length < 126 bytes
         let sdlMapping: [String: Int] = [
-            "A": 0, "CROSS": 0,
-            "B": 1, "CIRCLE": 1,
-            "X": 2, "SQUARE": 2,
-            "Y": 3, "TRIANGLE": 3,
-            "L1": 4, "R1": 5,
-            "L2": 6, "R2": 7,
-            "SELECT": 8, "START": 9,
-            "L3": 10, "R3": 11,
-            "PS": 12
+            "A": 0, "B": 1, "X": 2, "Y": 3
         ]
 
         let controllerInfoPayload: [Any] = [
             "controller_info",
             [
-                "name": "PS3 Controller",
+                "name": "PS3",
                 "guid": "0300",
                 "sdl_mapping": sdlMapping
             ] as [String: Any]
@@ -125,10 +117,10 @@ public final class DriverKitGamerPadAdapter: GamepadBackend, @unchecked Sendable
 
     private func diffAndSendButtons(prev: ControllerButtons?, current: ControllerButtons, task: URLSessionWebSocketTask) async throws {
         let buttonsToCheck: [(keyPath: KeyPath<ControllerButtons, Bool>, id: String)] = [
-            (\.cross, "CROSS"),
-            (\.circle, "CIRCLE"),
-            (\.square, "SQUARE"),
-            (\.triangle, "TRIANGLE"),
+            (\.cross, "A"),
+            (\.circle, "B"),
+            (\.square, "X"),
+            (\.triangle, "Y"),
             (\.l1, "L1"),
             (\.r1, "R1"),
             (\.l2, "L2"),

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-mac:
+    name: Build & Test macOS Companion
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app || true
+
+      - name: Build macOS App & Core
+        working-directory: MacApp
+        run: swift build -c release
+
+      - name: Run macOS Unit Tests
+        working-directory: MacApp
+        run: swift test
+
+      - name: Upload macOS Companion Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-companion-binary
+          path: MacApp/.build/release/MacApp
+
+  build-android:
+    name: Build & Test Android Controller
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make Gradle Wrapper Executable
+        working-directory: AndroidApp
+        run: chmod +x gradlew
+
+      - name: Run Android Unit Tests
+        working-directory: AndroidApp
+        run: ./gradlew testDebugUnitTest
+
+      - name: Build Debug APK
+        working-directory: AndroidApp
+        run: ./gradlew assembleDebug
+
+      - name: Upload Android Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps3-controller-debug-apk
+          path: AndroidApp/app/build/outputs/apk/debug/app-debug.apk

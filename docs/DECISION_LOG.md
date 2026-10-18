@@ -29,3 +29,14 @@
   - The Mac Companion app implements an abstract `GamepadBackend` protocol.
   - The concrete adapter bridges received Android state snapshots to the verified virtual gamepad daemon, keeping the architecture modular and driver-agnostic.
   - Phase 1 compatibility gate is PASSED. Proceeding to Phase 2.
+
+## D-005 — DriverKit local IPC framing and button identifier mapping
+- Status: Accepted
+- Decision: Enforce payload size < 126 bytes on DriverKit Socket.IO packets and translate PS3 controller buttons (`cross`, `circle`, `square`, `triangle`) to the DriverKit daemon's expected IDs (`"A"`, `"B"`, `"X"`, `"Y"`).
+- Reason: The DriverKit daemon's internal WebSocket parser only supports 1-byte length headers (< 126 bytes) and silently drops packets using 2-byte extended length headers. Its button identifier map expects `"A"` for button index 0.
+- Consequence: High reliability, 0 dropped frames, and verified detection by RPCS3's SDL3 layer.
+
+## D-006 — Android Jetpack Compose Multitouch Isolation and Dead Zone Math
+- Status: Accepted
+- Decision: Use pointer-level gesture isolation (`detectDragGestures` with radial clamping) for dual analog sticks, independent press/release gesture listeners (`awaitEachGesture` + `awaitFirstDown`) for buttons, and a normalized radial dead-zone calculation in `TouchInputMapper`.
+- Reason: Ensures that touching or dragging one analog stick does not cancel or steal pointers from the other stick or any button, providing genuine console-grade simultaneous multi-finger responsiveness.
