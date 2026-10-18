@@ -1,0 +1,46 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.jks
+*.keystore
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Xcode / Swift
+DerivedData/
+.build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+*.xcodeproj/project.xcworkspace/
+*.xcworkspace/xcuserdata/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.p12
+*.mobileprovision
+secrets/
+private/
+*.log
+
+# Test artifacts / local reports
+test-results/
+coverage/
+reports/local/
+
+# Local Backups
+backups/
+
