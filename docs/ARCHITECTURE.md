@@ -23,15 +23,21 @@
 
 ### Backend boundary
 
-The backend must expose operations equivalent to:
-- connect/initialize;
-- set button state;
-- set axis/trigger values;
-- release all controls;
-- report device/backend status;
-- disconnect/shutdown.
+The backend exposes the `GamepadBackend` protocol:
+```swift
+public protocol GamepadBackend: AnyObject {
+    var isConnected: Bool { get }
+    var deviceName: String { get }
+    func connect() async throws
+    func updateState(_ state: ControllerState) async throws
+    func releaseAll() async
+    func disconnect() async
+}
+```
 
-The concrete API is intentionally unspecified until Phase 1 verifies a supported backend. Do not fabricate an API for OpenJoystickDriver or assume that virtual-device enumeration implies external programmatic input support.
+The concrete adapter (`DriverKitGamerPadAdapter`) translates incoming `ControllerState` snapshots into discrete and analog events for the local virtual gamepad daemon (`localhost:8080`), ensuring genuine virtual HID output without kernel panic risks. In testing/CI, `FakeGamepadBackend` simulates virtual device output for unit and regression tests.
+
+See [`docs/PROTOCOL.md`](PROTOCOL.md) for full wire specification.
 
 ## Initial transport recommendation
 
