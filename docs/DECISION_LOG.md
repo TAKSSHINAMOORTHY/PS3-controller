@@ -40,3 +40,13 @@
 - Status: Accepted
 - Decision: Use pointer-level gesture isolation (`detectDragGestures` with radial clamping) for dual analog sticks, independent press/release gesture listeners (`awaitEachGesture` + `awaitFirstDown`) for buttons, and a normalized radial dead-zone calculation in `TouchInputMapper`.
 - Reason: Ensures that touching or dragging one analog stick does not cancel or steal pointers from the other stick or any button, providing genuine console-grade simultaneous multi-finger responsiveness.
+
+## D-007 — Android 16 WindowInsets compatibility & Cleartext WebSockets
+- Status: Accepted
+- Decision: Handle system bars in `onWindowFocusChanged(hasFocus)` via `WindowCompat.getInsetsController(window, window.decorView)` instead of directly accessing `window.insetsController` in `onCreate()`. Enable `android:usesCleartextTraffic="true"` in the Android Manifest.
+- Reason: On Android 16 (API 36+), accessing `window.insetsController` in `onCreate()` before DecorView attachment causes a `NullPointerException`. Cleartext traffic is required by default for local LAN/USB WebSocket (`ws://`) connections.
+
+## D-008 — Zero-Latency USB Port Forwarding & Auto-Connect
+- Status: Accepted
+- Decision: Configure `adb reverse tcp:6000 tcp:6000` for physical USB connections while retaining automatic broadcast/Wi-Fi connection capabilities on `192.168.1.0/24`. Default host fallback set to `127.0.0.1` when tethered, auto-connecting immediately on app launch.
+- Reason: USB reverse proxy eliminates Wi-Fi packet jitter and interference, delivering sub-millisecond input responsiveness while allowing seamless fallback to local Wi-Fi.

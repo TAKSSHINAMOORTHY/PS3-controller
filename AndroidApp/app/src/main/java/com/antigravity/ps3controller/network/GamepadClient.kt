@@ -15,6 +15,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -55,12 +56,14 @@ class GamepadClient(
     private var lastSentTime = 0L
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(3, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
-        .pingInterval(2, TimeUnit.SECONDS)
+        .pingInterval(0, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     fun connect() {
+        isExplicitDisconnect = false
         if (_status.value == ConnectionStatus.CONNECTING || _status.value == ConnectionStatus.CONNECTED) {
             return
         }
@@ -69,10 +72,12 @@ class GamepadClient(
         _errorMessage.value = null
 
         val url = "ws://$serverHost:$serverPort"
+        Log.i("GamepadClient", "Connecting to $url...")
         val request = Request.Builder().url(url).build()
 
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.i("GamepadClient", "WebSocket onOpen! Sending PairRequest...")
                 _status.value = ConnectionStatus.PAIRING
                 // Send pair request
                 val pairReq = PairRequest(
@@ -85,14 +90,17 @@ class GamepadClient(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.i("GamepadClient", "onMessage: $text")
                 handleIncomingMessage(text)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.w("GamepadClient", "onClosed: $reason ($code)")
                 handleDisconnect("Closed: $reason ($code)")
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e("GamepadClient", "onFailure: ${t.localizedMessage}", t)
                 handleDisconnect("Failed: ${t.localizedMessage ?: "Unknown error"}")
             }
         })
@@ -156,6 +164,8 @@ class GamepadClient(
         }
     }
 
+    private var isExplicitDisconnect = false
+
     private fun handleDisconnect(reason: String) {
         heartbeatJob?.cancel()
         heartbeatJob = null
@@ -163,9 +173,20 @@ class GamepadClient(
         _status.value = ConnectionStatus.DISCONNECTED
         _errorMessage.value = reason
         webSocket = null
+
+        if (!isExplicitDisconnect) {
+            scope.launch {
+                delay(1500)
+                if (_status.value == ConnectionStatus.DISCONNECTED && !isExplicitDisconnect) {
+                    Log.i("GamepadClient", "Auto-reconnecting to ws://$serverHost:$serverPort...")
+                    connect()
+                }
+            }
+        }
     }
 
     fun disconnect() {
+        isExplicitDisconnect = true
         heartbeatJob?.cancel()
         heartbeatJob = null
 

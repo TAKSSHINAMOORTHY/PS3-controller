@@ -51,14 +51,17 @@
     - Created GitHub Actions CI workflow in `.github/workflows/ci.yml` for multi-platform build and testing.
     - Updated `README.md` with full system architecture diagram (Mermaid), quickstart guide, RPCS3 pad configuration tutorial, and troubleshooting notes.
     - Added MIT `LICENSE` and updated `CHANGELOG.md` for version 1.0.0.
+  * Live Device Installation & Auto-Connect:
+    - Installed `PS3ControllerCompanion.app` to `/Applications/` on macOS M5 (macOS 27).
+    - Built and installed `app-debug.apk` directly onto physical Android device (`I2212`, Android 16) via ADB.
+    - Resolved Android 16 edge-to-edge Insets lifecycle crash and enabled cleartext WebSocket permissions.
+    - Established zero-latency USB reverse forwarding (`adb reverse tcp:6000 tcp:6000`) and verified auto-pairing on launch.
+    - Verified live connection status pill (`CONNECTED: 127.0.0.1:6000`) and console HUD.
 - Files changed:
-  * `tests/test_e2e_pipeline.py`
-  * `tests/test_resilience.py`
-  * `.github/workflows/ci.yml`
-  * `README.md`
-  * `LICENSE`
-  * `CHANGELOG.md`
-  * `docs/PROGRESS.md`
+  * `AndroidApp/app/src/main/AndroidManifest.xml`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/MainActivity.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/network/GamepadClient.kt`
   * `docs/DECISION_LOG.md`
+  * `docs/PROGRESS.md`
 - Tests passed: ALL (0 failures).
-- Blockers: None. All requirements fulfilled.
+- Blockers: None. Live devices connected and operational.
