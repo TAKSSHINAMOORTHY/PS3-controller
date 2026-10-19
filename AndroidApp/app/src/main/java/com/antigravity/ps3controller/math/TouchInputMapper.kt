@@ -33,15 +33,19 @@ object TouchInputMapper {
 
         // Raw normalized radius in [0, inf)
         val rawDist = hypot(dx, dy)
-        val normalizedDist = min(rawDist / maxRadius, 1.0f)
+        if (rawDist <= 0.00001f) return StickResult(0f, 0f)
 
-        if (normalizedDist <= deadZone) {
+        val normalizedDist = min(rawDist / maxRadius, 1.0f)
+        val effectiveDeadZone = deadZone.coerceIn(0.0f, 0.95f)
+
+        if (normalizedDist <= effectiveDeadZone) {
             return StickResult(0f, 0f)
         }
 
-        // Rescale range (deadZone..1.0] -> (0.0..1.0]
-        val adjustedDist = (normalizedDist - deadZone) / (1.0f - deadZone)
-        val curvedDist = adjustedDist.pow(sensitivity)
+        // Rescale range (effectiveDeadZone..1.0] -> (0.0..1.0]
+        val adjustedDist = ((normalizedDist - effectiveDeadZone) / (1.0f - effectiveDeadZone)).coerceIn(0.0f, 1.0f)
+        val effectiveSens = if (sensitivity <= 0f) 1.0f else sensitivity
+        val curvedDist = if (effectiveSens == 1.0f) adjustedDist else adjustedDist.pow(effectiveSens)
 
         // Unit vector along drag direction
         val unitX = dx / rawDist

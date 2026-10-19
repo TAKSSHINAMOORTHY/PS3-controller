@@ -64,16 +64,27 @@
     - Designed custom landscape `SettingsDialog` (`DialogProperties(usePlatformDefaultWidth = false)`) with side-by-side Button Sensitivity (0.5x–2.5x), Stick Sensitivity (0.5x–2.0x), Dead Zone (1%–25%), Haptics toggle, and one-tap "✏️ Edit Layout" launcher.
     - Updated `TouchInputMapper.kt` and `PS3Buttons.kt` to dynamically scale hitboxes and apply sensitivity multipliers to analog trigger and pressure calculations.
     - Validated all 11 unit tests (`./gradlew testDebugUnitTest`) and deployed to physical hardware.
+  * Master Fixes (Input Bugs, Pipeline Repairs & Independent Button Editing):
+    - Issue 1 (Left Analog Stick Drift & Stuck Movement): Resolved accumulator drift by replacing `detectDragGestures` with `awaitEachGesture` per-pointer tracking. Centered calculations use absolute `touchPos - center`, sanitized radial deadzone [0.0, 0.95] with smooth remapping, and added immediate rate-limiting bypass for neutral/release packets in `GamepadClient.kt` with a trailing dispatcher ensuring the final resting state (0, 0) is never dropped.
+    - Issue 2 (Right Analog Stick Pipeline): Verified end-to-end transmission of `rx` and `ry` through protocol validator. Mapped macOS companion directly to RPCS3's native `Default.yml` Player 1 keyboard bindings (Up: Home 115, Down: End 119, Left: Forward Delete 117, Right: Page Down 121) alongside IKJL aliases, and mapped L3 to F (3) and PS to Backspace (51).
+    - Issue 3 (Menu/Cutscene Recovery & macOS Input): Replaced arbitrary synthetic mouse clicks with native macOS `CGEventSource(stateID: .hidSystemState)` and `AXIsProcessTrusted()` accessibility check. Removed duplicate event posting. Upgraded `ControllerServer` to extract all multi-frame packets in stream buffers, increased idle heartbeat timeout to 8.0s, and guaranteed all held keys are released on neutral transition, disconnect, or timeout.
+    - Issue 4 (Independent Control Movement & Resizing): Expanded `LayoutConfig.kt` to define stable, unique `ControlId`s for all 19 individual controls (Cross, Circle, Square, Triangle, D-pad Up/Down/Left/Right, L1, R1, L2, R2, L3, R3, Start, Select, PS, Left Stick, Right Stick). Each control stores independent $(x, y)$ offsets, scale factor, sensitivity, and opacity. Migrated legacy cluster configs automatically. Updated `ControllerScreen.kt` with individual `EditableControl` wrappers and an interactive `EditInspectorToolbar` allowing independent repositioning, resizing (0.5x–2.0x), sensitivity tuning, nudge, and reset.
 - Files changed:
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/MainActivity.kt`
   * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/math/TouchInputMapper.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/components/JoystickStick.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/network/GamepadClient.kt`
   * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/model/LayoutConfig.kt`
   * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/ControllerScreen.kt`
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/SettingsDialog.kt`
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/components/PS3Buttons.kt`
-  * `AndroidApp/app/src/test/java/com/antigravity/ps3controller/TouchInputMapperTest.kt`
+  * `AndroidApp/app/src/test/java/com/antigravity/ps3controller/IndependentControlsLayoutTest.kt`
+  * `MacApp/Sources/MacGamepadCore/RPCS3DirectInputAdapter.swift`
+  * `MacApp/Sources/MacGamepadCore/ControllerServer.swift`
+  * `MacApp/Tests/MacGamepadCoreTests/ProtocolTests.swift`
   * `docs/DECISION_LOG.md`
   * `docs/PROGRESS.md`
-- Tests passed: ALL (11/11 unit tests passed, 0 failures).
-- Blockers: None. Live devices connected, paired, and verified.
+- Tests passed: ALL
+  * Android unit tests: 17/17 passed (`./gradlew testDebugUnitTest`)
+  * macOS Core tests: 11/11 passed (`swift test`)
+  * Android APK build: SUCCESS (`./gradlew assembleDebug`)
+  * macOS companion release build: SUCCESS (`swift build -c release`)
+- Blockers: None. Implementation complete and ready for final manual testing.
 

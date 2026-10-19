@@ -170,4 +170,55 @@ final class ProtocolTests: XCTestCase {
         XCTAssertFalse(backend.isConnected)
         XCTAssertEqual(backend.disconnectCallCount, 1)
     }
+
+    func testSimultaneousAnalogSticksState() throws {
+        let validator = ProtocolValidator(sessionId: "sess-both-sticks")
+        var state = ControllerState(
+            sessionId: "sess-both-sticks",
+            seq: 1,
+            axes: ControllerAxes(lx: -0.8, ly: 0.9, rx: 0.5, ry: -0.7)
+        )
+
+        try validator.validateAndNormalizeState(&state)
+
+        XCTAssertEqual(state.axes.lx, -0.8, accuracy: 0.001)
+        XCTAssertEqual(state.axes.ly, 0.9, accuracy: 0.001)
+        XCTAssertEqual(state.axes.rx, 0.5, accuracy: 0.001)
+        XCTAssertEqual(state.axes.ry, -0.7, accuracy: 0.001)
+
+        // Serialize and deserialize to ensure both sticks survive the wire
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(ControllerState.self, from: data)
+
+        XCTAssertEqual(decoded.axes.lx, -0.8, accuracy: 0.001)
+        XCTAssertEqual(decoded.axes.ly, 0.9, accuracy: 0.001)
+        XCTAssertEqual(decoded.axes.rx, 0.5, accuracy: 0.001)
+        XCTAssertEqual(decoded.axes.ry, -0.7, accuracy: 0.001)
+    }
+
+    func testRPCS3DirectInputAdapterLifecycleAndMappings() async throws {
+        let adapter = RPCS3DirectInputAdapter()
+        XCTAssertFalse(adapter.isConnected)
+
+        try await adapter.connect()
+        XCTAssertTrue(adapter.isConnected)
+
+        // Test updating with left stick, right stick, face buttons and triggers
+        let activeState = ControllerState(
+            sessionId: "sess-direct",
+            seq: 1,
+            buttons: ControllerButtons(cross: true, circle: true, square: true, triangle: true, l1: true, r1: true, l3: true, r3: true, start: true, select: true, ps: true),
+            dpad: ControllerDPad(up: true, down: false, left: true, right: false),
+            axes: ControllerAxes(lx: 0.9, ly: -0.9, rx: -0.8, ry: 0.8),
+            triggers: ControllerTriggers(l2: 1.0, r2: 1.0)
+        )
+
+        try await adapter.updateState(activeState)
+
+        // Test neutral release
+        await adapter.releaseAll()
+
+        await adapter.disconnect()
+        XCTAssertFalse(adapter.isConnected)
+    }
 }

@@ -34,6 +34,11 @@ public final class ControllerServer: @unchecked Sendable {
 
     public func start() throws {
         let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        params.includePeerToPeer = true
+        if let ipOptions = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ipOptions.version = .v4
+        }
         let nwPort = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port(integerLiteral: 6000)
         let listener = try NWListener(using: params, on: nwPort)
 
@@ -83,13 +88,11 @@ public final class ControllerServer: @unchecked Sendable {
 
     private func handleIncomingConnection(_ connection: NWConnection) {
         lock.lock()
-        // If already connected to a client, reject new connection
-        if activeConnection != nil {
-            lock.unlock()
-            connection.cancel()
-            return
+        if let existing = activeConnection {
+            existing.cancel()
         }
         activeConnection = connection
+        lastMessageDate = Date()
         lock.unlock()
 
         connection.stateUpdateHandler = { [weak self] state in
@@ -100,9 +103,9 @@ public final class ControllerServer: @unchecked Sendable {
                 self.updateStatus(.clientConnected(peer: peer))
                 self.receiveNextMessage(on: connection)
             case .failed(let err):
-                self.handleClientDisconnect(reason: err.localizedDescription)
+                self.handleClientDisconnect(connection: connection, reason: err.localizedDescription)
             case .cancelled:
-                self.handleClientDisconnect(reason: "Connection cancelled")
+                self.handleClientDisconnect(connection: connection, reason: "Connection cancelled")
             default:
                 break
             }
@@ -120,7 +123,7 @@ public final class ControllerServer: @unchecked Sendable {
             }
 
             if isComplete || error != nil {
-                self.handleClientDisconnect(reason: error?.localizedDescription ?? "Client closed stream")
+                self.handleClientDisconnect(connection: connection, reason: error?.localizedDescription ?? "Client closed stream")
             } else {
                 self.receiveNextMessage(on: connection)
             }
@@ -138,31 +141,33 @@ public final class ControllerServer: @unchecked Sendable {
             return
         }
 
-        // Parse WebSocket frame or raw JSON
-        let payloadData = extractWebSocketPayload(data) ?? data
+        // Parse WebSocket frames or raw JSON
+        let payloads = extractAllWebSocketPayloads(data)
 
-        do {
-            try validator.validateSize(payloadData)
+        for payloadData in payloads {
+            do {
+                try validator.validateSize(payloadData)
 
-            // Inspect packet type
-            if let json = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
-               let type = json["type"] as? String {
-                switch type {
-                case "pair_request":
-                    handlePairRequest(payloadData, on: connection)
-                case "state":
-                    handleStateUpdate(payloadData)
-                case "heartbeat":
-                    // Valid heartbeat resets timeout
-                    break
-                case "disconnect":
-                    handleClientDisconnect(reason: "Client sent explicit disconnect")
-                default:
-                    onError?("Unknown packet type: \(type)")
+                // Inspect packet type
+                if let json = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+                   let type = json["type"] as? String {
+                    switch type {
+                    case "pair_request":
+                        handlePairRequest(payloadData, on: connection)
+                    case "state":
+                        handleStateUpdate(payloadData)
+                    case "heartbeat":
+                        // Valid heartbeat resets timeout
+                        break
+                    case "disconnect":
+                        handleClientDisconnect(connection: connection, reason: "Client sent explicit disconnect")
+                    default:
+                        onError?("Unknown packet type: \(type)")
+                    }
                 }
+            } catch {
+                onError?("Validation error: \(error)")
             }
-        } catch {
-            onError?("Validation error: \(error)")
         }
     }
 
@@ -218,8 +223,12 @@ public final class ControllerServer: @unchecked Sendable {
         }
     }
 
-    private func handleClientDisconnect(reason: String) {
+    private func handleClientDisconnect(connection: NWConnection, reason: String) {
         lock.lock()
+        guard activeConnection === connection else {
+            lock.unlock()
+            return
+        }
         activeConnection = nil
         activeSessionId = nil
         validator.reset()
@@ -239,34 +248,56 @@ public final class ControllerServer: @unchecked Sendable {
         connection.send(content: frame, completion: .contentProcessed({ _ in }))
     }
 
-    private func extractWebSocketPayload(_ data: Data) -> Data? {
-        guard data.count >= 2 else { return nil }
-        let byte1 = data[1]
-        let isMasked = (byte1 & 0x80) != 0
-        var payloadLen = Int(byte1 & 0x7F)
-        var offset = 2
+    private func extractAllWebSocketPayloads(_ data: Data) -> [Data] {
+        var results: [Data] = []
+        var offset = 0
+        let count = data.count
 
-        if payloadLen == 126 {
-            guard data.count >= 4 else { return nil }
-            payloadLen = Int(data[2]) << 8 | Int(data[3])
-            offset = 4
-        } else if payloadLen == 127 {
-            return nil // We do not accept > 64KB frames
-        }
+        while offset + 2 <= count {
+            let byte0 = data[offset]
+            let opcode = byte0 & 0x0F
+            let byte1 = data[offset + 1]
+            let isMasked = (byte1 & 0x80) != 0
+            var payloadLen = Int(byte1 & 0x7F)
+            var headerSize = 2
 
-        if isMasked {
-            guard data.count >= offset + 4 + payloadLen else { return nil }
-            let mask = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]
-            offset += 4
-            var unmasked = Data(count: payloadLen)
-            for i in 0..<payloadLen {
-                unmasked[i] = data[offset + i] ^ mask[i % 4]
+            if payloadLen == 126 {
+                guard offset + 4 <= count else { break }
+                payloadLen = Int(data[offset + 2]) << 8 | Int(data[offset + 3])
+                headerSize = 4
+            } else if payloadLen == 127 {
+                break // Drop jumbo frames > 64KB
             }
-            return unmasked
-        } else {
-            guard data.count >= offset + payloadLen else { return nil }
-            return data.subdata(in: offset..<(offset + payloadLen))
+
+            let maskSize = isMasked ? 4 : 0
+            let totalFrameSize = headerSize + maskSize + payloadLen
+            guard offset + totalFrameSize <= count else { break }
+
+            if opcode == 0x1 { // Text frame
+                if isMasked {
+                    let maskOffset = offset + headerSize
+                    let mask = [data[maskOffset], data[maskOffset + 1], data[maskOffset + 2], data[maskOffset + 3]]
+                    let payloadOffset = maskOffset + 4
+                    var unmasked = Data(count: payloadLen)
+                    for i in 0..<payloadLen {
+                        unmasked[i] = data[payloadOffset + i] ^ mask[i % 4]
+                    }
+                    results.append(unmasked)
+                } else {
+                    let payloadOffset = offset + headerSize
+                    results.append(data.subdata(in: payloadOffset..<(payloadOffset + payloadLen)))
+                }
+            } else if opcode == 0x8 { // Connection close frame
+                break
+            }
+
+            offset += totalFrameSize
         }
+
+        if results.isEmpty && !data.isEmpty {
+            return [data]
+        }
+        return results
     }
 
     private func makeWebSocketFrame(_ payload: Data) -> Data {
@@ -285,14 +316,14 @@ public final class ControllerServer: @unchecked Sendable {
 
     private func startTimeoutMonitor() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 1.0, repeating: 0.5)
+        timer.schedule(deadline: .now() + 2.0, repeating: 1.0)
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
-            let (conn, last) = self.lock.withLock {
-                (self.activeConnection, self.lastMessageDate)
+            let (conn, hasSession, last) = self.lock.withLock {
+                (self.activeConnection, self.activeSessionId != nil, self.lastMessageDate)
             }
-            if conn != nil && Date().timeIntervalSince(last) > 1.0 {
-                self.handleClientDisconnect(reason: "Session timed out (> 1000ms idle)")
+            if let conn = conn, hasSession && Date().timeIntervalSince(last) > 8.0 {
+                self.handleClientDisconnect(connection: conn, reason: "Session timed out (> 8000ms idle)")
             }
         }
         self.timeoutTimer = timer

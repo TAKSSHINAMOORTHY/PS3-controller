@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -47,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -56,19 +56,18 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.antigravity.ps3controller.math.TouchInputMapper
+import com.antigravity.ps3controller.model.ControlId
+import com.antigravity.ps3controller.model.ControlLayout
 import com.antigravity.ps3controller.model.ControllerAxes
 import com.antigravity.ps3controller.model.ControllerButtons
 import com.antigravity.ps3controller.model.ControllerDPad
 import com.antigravity.ps3controller.model.ControllerLayoutConfig
 import com.antigravity.ps3controller.model.ControllerState
 import com.antigravity.ps3controller.model.ControllerTriggers
-import com.antigravity.ps3controller.model.ElementLayout
-import com.antigravity.ps3controller.model.LayoutElementType
 import com.antigravity.ps3controller.network.ConnectionStatus
 import com.antigravity.ps3controller.network.GamepadClient
-import com.antigravity.ps3controller.ui.components.ActionButtonsPad
-import com.antigravity.ps3controller.ui.components.DPadPad
 import com.antigravity.ps3controller.ui.components.JoystickStick
+import com.antigravity.ps3controller.ui.components.PressablePadButton
 import com.antigravity.ps3controller.ui.components.ShoulderButton
 import com.antigravity.ps3controller.ui.components.SystemPillButton
 import kotlin.math.roundToInt
@@ -89,6 +88,8 @@ fun ControllerScreen(
     onOpenSettings: () -> Unit
 ) {
     val connectionStatus by client.status.collectAsState()
+    val activeTransport by client.activeTransport.collectAsState()
+    val activeHost by client.activeHost.collectAsState()
     val errorMessage by client.errorMessage.collectAsState()
 
     var buttons by remember { mutableStateOf(ControllerButtons()) }
@@ -96,7 +97,7 @@ fun ControllerScreen(
     var axes by remember { mutableStateOf(ControllerAxes()) }
     var triggers by remember { mutableStateOf(ControllerTriggers()) }
 
-    var selectedElement by remember { mutableStateOf<LayoutElementType?>(LayoutElementType.ACTION_BUTTONS) }
+    var selectedControl by remember { mutableStateOf(ControlId.CROSS) }
 
     fun updateAndSend(
         newButtons: ControllerButtons = buttons,
@@ -104,7 +105,7 @@ fun ControllerScreen(
         newAxes: ControllerAxes = axes,
         newTriggers: ControllerTriggers = triggers
     ) {
-        if (isEditMode) return // Don't fire inputs while customizing layout
+        if (isEditMode) return // In edit mode, layout interactions never fire inputs
         buttons = newButtons
         dpad = newDpad
         axes = newAxes
@@ -134,7 +135,8 @@ fun ControllerScreen(
             // TOP BAR
             TopStatusBar(
                 status = connectionStatus,
-                host = host,
+                transport = activeTransport,
+                host = activeHost,
                 port = port,
                 error = errorMessage,
                 isEditMode = isEditMode,
@@ -156,35 +158,36 @@ fun ControllerScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // LEFT CLUSTER: Shoulders, D-Pad, Left Stick
+                    // LEFT COLUMN: Shoulders, D-Pad, Left Stick
                     Column(
                         modifier = Modifier.fillMaxHeight(),
                         verticalArrangement = Arrangement.SpaceBetween,
                         horizontalAlignment = Alignment.Start
                     ) {
-                        // Left Shoulders
-                        val leftShouldersLayout = layoutConfig.leftShoulders
-                        EditableCluster(
-                            type = LayoutElementType.LEFT_SHOULDERS,
-                            layout = leftShouldersLayout,
-                            isEditMode = isEditMode,
-                            isSelected = selectedElement == LayoutElementType.LEFT_SHOULDERS,
-                            onSelect = { selectedElement = LayoutElementType.LEFT_SHOULDERS },
-                            onDragDelta = { dx, dy ->
-                                val updated = leftShouldersLayout.copy(
-                                    offsetX = leftShouldersLayout.offsetX + dx,
-                                    offsetY = leftShouldersLayout.offsetY + dy
-                                )
-                                onUpdateLayoutConfig(layoutConfig.updateElement(LayoutElementType.LEFT_SHOULDERS, updated))
-                            }
-                        ) {
-                            val effSens = leftShouldersLayout.sensitivity * buttonSensitivity
-                            Row(horizontalArrangement = Arrangement.spacedBy((8 * leftShouldersLayout.scale).dp)) {
+                        // Left Shoulders (L2, L1)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val l2Layout = layoutConfig.getControl(ControlId.L2)
+                            EditableControl(
+                                id = ControlId.L2,
+                                layout = l2Layout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.L2,
+                                onSelect = { selectedControl = ControlId.L2 },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.L2,
+                                            l2Layout.copy(offsetX = l2Layout.offsetX + dx, offsetY = l2Layout.offsetY + dy)
+                                        )
+                                    )
+                                }
+                            ) {
+                                val effSens = l2Layout.sensitivity * buttonSensitivity
                                 ShoulderButton(
                                     label = "L2",
                                     width = 68.dp,
                                     height = 36.dp,
-                                    scale = leftShouldersLayout.scale,
+                                    scale = l2Layout.scale,
                                     sensitivity = effSens,
                                     onPressChanged = { isPressed ->
                                         val trigVal = TouchInputMapper.mapTrigger(if (isPressed) 1f else 0f, effSens)
@@ -194,11 +197,30 @@ fun ControllerScreen(
                                         )
                                     }
                                 )
+                            }
+
+                            val l1Layout = layoutConfig.getControl(ControlId.L1)
+                            EditableControl(
+                                id = ControlId.L1,
+                                layout = l1Layout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.L1,
+                                onSelect = { selectedControl = ControlId.L1 },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.L1,
+                                            l1Layout.copy(offsetX = l1Layout.offsetX + dx, offsetY = l1Layout.offsetY + dy)
+                                        )
+                                    )
+                                }
+                            ) {
+                                val effSens = l1Layout.sensitivity * buttonSensitivity
                                 ShoulderButton(
                                     label = "L1",
                                     width = 68.dp,
                                     height = 36.dp,
-                                    scale = leftShouldersLayout.scale,
+                                    scale = l1Layout.scale,
                                     sensitivity = effSens,
                                     onPressChanged = { isPressed ->
                                         updateAndSend(newButtons = buttons.copy(l1 = isPressed))
@@ -212,45 +234,158 @@ fun ControllerScreen(
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val dpadLayout = layoutConfig.dpad
-                            EditableCluster(
-                                type = LayoutElementType.DPAD,
-                                layout = dpadLayout,
-                                isEditMode = isEditMode,
-                                isSelected = selectedElement == LayoutElementType.DPAD,
-                                onSelect = { selectedElement = LayoutElementType.DPAD },
-                                onDragDelta = { dx, dy ->
-                                    val updated = dpadLayout.copy(
-                                        offsetX = dpadLayout.offsetX + dx,
-                                        offsetY = dpadLayout.offsetY + dy
-                                    )
-                                    onUpdateLayoutConfig(layoutConfig.updateElement(LayoutElementType.DPAD, updated))
-                                }
+                            // D-Pad Container with 4 independently movable & resizable directional buttons
+                            Box(
+                                modifier = Modifier.size(164.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                val effSens = dpadLayout.sensitivity * buttonSensitivity
-                                DPadPad(
-                                    scale = dpadLayout.scale,
-                                    sensitivity = effSens,
-                                    onUp = { updateAndSend(newDpad = dpad.copy(up = it)) },
-                                    onDown = { updateAndSend(newDpad = dpad.copy(down = it)) },
-                                    onLeft = { updateAndSend(newDpad = dpad.copy(left = it)) },
-                                    onRight = { updateAndSend(newDpad = dpad.copy(right = it)) }
+                                // Center hub
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .background(Color(0xFF1E2229), RoundedCornerShape(4.dp))
                                 )
+
+                                // D-Pad UP
+                                val upLayout = layoutConfig.getControl(ControlId.DPAD_UP)
+                                Box(modifier = Modifier.align(Alignment.TopCenter)) {
+                                    EditableControl(
+                                        id = ControlId.DPAD_UP,
+                                        layout = upLayout,
+                                        isEditMode = isEditMode,
+                                        isSelected = selectedControl == ControlId.DPAD_UP,
+                                        onSelect = { selectedControl = ControlId.DPAD_UP },
+                                        onDragDelta = { dx, dy ->
+                                            onUpdateLayoutConfig(
+                                                layoutConfig.updateControl(
+                                                    ControlId.DPAD_UP,
+                                                    upLayout.copy(offsetX = upLayout.offsetX + dx, offsetY = upLayout.offsetY + dy)
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        PressablePadButton(
+                                            label = "▲",
+                                            accentColor = Color(0xFF94A3B8),
+                                            isRound = false,
+                                            size = 52.dp,
+                                            scale = upLayout.scale,
+                                            sensitivity = upLayout.sensitivity * buttonSensitivity,
+                                            fontSize = 18,
+                                            onPressChanged = { updateAndSend(newDpad = dpad.copy(up = it)) }
+                                        )
+                                    }
+                                }
+
+                                // D-Pad LEFT
+                                val leftLayout = layoutConfig.getControl(ControlId.DPAD_LEFT)
+                                Box(modifier = Modifier.align(Alignment.CenterStart)) {
+                                    EditableControl(
+                                        id = ControlId.DPAD_LEFT,
+                                        layout = leftLayout,
+                                        isEditMode = isEditMode,
+                                        isSelected = selectedControl == ControlId.DPAD_LEFT,
+                                        onSelect = { selectedControl = ControlId.DPAD_LEFT },
+                                        onDragDelta = { dx, dy ->
+                                            onUpdateLayoutConfig(
+                                                layoutConfig.updateControl(
+                                                    ControlId.DPAD_LEFT,
+                                                    leftLayout.copy(offsetX = leftLayout.offsetX + dx, offsetY = leftLayout.offsetY + dy)
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        PressablePadButton(
+                                            label = "◀",
+                                            accentColor = Color(0xFF94A3B8),
+                                            isRound = false,
+                                            size = 52.dp,
+                                            scale = leftLayout.scale,
+                                            sensitivity = leftLayout.sensitivity * buttonSensitivity,
+                                            fontSize = 18,
+                                            onPressChanged = { updateAndSend(newDpad = dpad.copy(left = it)) }
+                                        )
+                                    }
+                                }
+
+                                // D-Pad RIGHT
+                                val rightLayout = layoutConfig.getControl(ControlId.DPAD_RIGHT)
+                                Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                                    EditableControl(
+                                        id = ControlId.DPAD_RIGHT,
+                                        layout = rightLayout,
+                                        isEditMode = isEditMode,
+                                        isSelected = selectedControl == ControlId.DPAD_RIGHT,
+                                        onSelect = { selectedControl = ControlId.DPAD_RIGHT },
+                                        onDragDelta = { dx, dy ->
+                                            onUpdateLayoutConfig(
+                                                layoutConfig.updateControl(
+                                                    ControlId.DPAD_RIGHT,
+                                                    rightLayout.copy(offsetX = rightLayout.offsetX + dx, offsetY = rightLayout.offsetY + dy)
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        PressablePadButton(
+                                            label = "▶",
+                                            accentColor = Color(0xFF94A3B8),
+                                            isRound = false,
+                                            size = 52.dp,
+                                            scale = rightLayout.scale,
+                                            sensitivity = rightLayout.sensitivity * buttonSensitivity,
+                                            fontSize = 18,
+                                            onPressChanged = { updateAndSend(newDpad = dpad.copy(right = it)) }
+                                        )
+                                    }
+                                }
+
+                                // D-Pad DOWN
+                                val downLayout = layoutConfig.getControl(ControlId.DPAD_DOWN)
+                                Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+                                    EditableControl(
+                                        id = ControlId.DPAD_DOWN,
+                                        layout = downLayout,
+                                        isEditMode = isEditMode,
+                                        isSelected = selectedControl == ControlId.DPAD_DOWN,
+                                        onSelect = { selectedControl = ControlId.DPAD_DOWN },
+                                        onDragDelta = { dx, dy ->
+                                            onUpdateLayoutConfig(
+                                                layoutConfig.updateControl(
+                                                    ControlId.DPAD_DOWN,
+                                                    downLayout.copy(offsetX = downLayout.offsetX + dx, offsetY = downLayout.offsetY + dy)
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        PressablePadButton(
+                                            label = "▼",
+                                            accentColor = Color(0xFF94A3B8),
+                                            isRound = false,
+                                            size = 52.dp,
+                                            scale = downLayout.scale,
+                                            sensitivity = downLayout.sensitivity * buttonSensitivity,
+                                            fontSize = 18,
+                                            onPressChanged = { updateAndSend(newDpad = dpad.copy(down = it)) }
+                                        )
+                                    }
+                                }
                             }
 
-                            val leftStickLayout = layoutConfig.leftStick
-                            EditableCluster(
-                                type = LayoutElementType.LEFT_STICK,
+                            // Left Analog Stick
+                            val leftStickLayout = layoutConfig.getControl(ControlId.LEFT_STICK)
+                            EditableControl(
+                                id = ControlId.LEFT_STICK,
                                 layout = leftStickLayout,
                                 isEditMode = isEditMode,
-                                isSelected = selectedElement == LayoutElementType.LEFT_STICK,
-                                onSelect = { selectedElement = LayoutElementType.LEFT_STICK },
+                                isSelected = selectedControl == ControlId.LEFT_STICK,
+                                onSelect = { selectedControl = ControlId.LEFT_STICK },
                                 onDragDelta = { dx, dy ->
-                                    val updated = leftStickLayout.copy(
-                                        offsetX = leftStickLayout.offsetX + dx,
-                                        offsetY = leftStickLayout.offsetY + dy
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.LEFT_STICK,
+                                            leftStickLayout.copy(offsetX = leftStickLayout.offsetX + dx, offsetY = leftStickLayout.offsetY + dy)
+                                        )
                                     )
-                                    onUpdateLayoutConfig(layoutConfig.updateElement(LayoutElementType.LEFT_STICK, updated))
                                 }
                             ) {
                                 JoystickStick(
@@ -265,111 +400,202 @@ fun ControllerScreen(
                         }
                     }
 
-                    // CENTER CLUSTER: System buttons (Select, PS, Start) & L3/R3
-                    val centerLayout = layoutConfig.centerControls
-                    EditableCluster(
-                        type = LayoutElementType.CENTER_CONTROLS,
-                        layout = centerLayout,
-                        isEditMode = isEditMode,
-                        isSelected = selectedElement == LayoutElementType.CENTER_CONTROLS,
-                        onSelect = { selectedElement = LayoutElementType.CENTER_CONTROLS },
-                        onDragDelta = { dx, dy ->
-                            val updated = centerLayout.copy(
-                                offsetX = centerLayout.offsetX + dx,
-                                offsetY = centerLayout.offsetY + dy
-                            )
-                            onUpdateLayoutConfig(layoutConfig.updateElement(LayoutElementType.CENTER_CONTROLS, updated))
-                        }
+                    // CENTER COLUMN: System buttons & Stick Clicks
+                    Column(
+                        modifier = Modifier.fillMaxHeight(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceAround
                     ) {
-                        val effSens = centerLayout.sensitivity * buttonSensitivity
-                        Column(
-                            modifier = Modifier.fillMaxHeight(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.SpaceAround
-                        ) {
-                            // L3 / R3 Stick Clicks
-                            Row(horizontalArrangement = Arrangement.spacedBy((16 * centerLayout.scale).dp)) {
+                        // L3 / R3 Stick Clicks
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            val l3Layout = layoutConfig.getControl(ControlId.L3)
+                            EditableControl(
+                                id = ControlId.L3,
+                                layout = l3Layout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.L3,
+                                onSelect = { selectedControl = ControlId.L3 },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.L3,
+                                            l3Layout.copy(offsetX = l3Layout.offsetX + dx, offsetY = l3Layout.offsetY + dy)
+                                        )
+                                    )
+                                }
+                            ) {
                                 SystemPillButton(
                                     label = "L3",
-                                    scale = centerLayout.scale,
-                                    sensitivity = effSens,
+                                    scale = l3Layout.scale,
+                                    sensitivity = l3Layout.sensitivity * buttonSensitivity,
                                     onPressChanged = { updateAndSend(newButtons = buttons.copy(l3 = it)) }
-                                )
-                                SystemPillButton(
-                                    label = "R3",
-                                    scale = centerLayout.scale,
-                                    sensitivity = effSens,
-                                    onPressChanged = { updateAndSend(newButtons = buttons.copy(r3 = it)) }
                                 )
                             }
 
-                            // Select, PS, Start
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy((12 * centerLayout.scale).dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            val r3Layout = layoutConfig.getControl(ControlId.R3)
+                            EditableControl(
+                                id = ControlId.R3,
+                                layout = r3Layout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.R3,
+                                onSelect = { selectedControl = ControlId.R3 },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.R3,
+                                            r3Layout.copy(offsetX = r3Layout.offsetX + dx, offsetY = r3Layout.offsetY + dy)
+                                        )
+                                    )
+                                }
+                            ) {
+                                SystemPillButton(
+                                    label = "R3",
+                                    scale = r3Layout.scale,
+                                    sensitivity = r3Layout.sensitivity * buttonSensitivity,
+                                    onPressChanged = { updateAndSend(newButtons = buttons.copy(r3 = it)) }
+                                )
+                            }
+                        }
+
+                        // Select, PS, Start
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val selectLayout = layoutConfig.getControl(ControlId.SELECT)
+                            EditableControl(
+                                id = ControlId.SELECT,
+                                layout = selectLayout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.SELECT,
+                                onSelect = { selectedControl = ControlId.SELECT },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.SELECT,
+                                            selectLayout.copy(offsetX = selectLayout.offsetX + dx, offsetY = selectLayout.offsetY + dy)
+                                        )
+                                    )
+                                }
                             ) {
                                 SystemPillButton(
                                     label = "SELECT",
-                                    scale = centerLayout.scale,
-                                    sensitivity = effSens,
+                                    scale = selectLayout.scale,
+                                    sensitivity = selectLayout.sensitivity * buttonSensitivity,
                                     onPressChanged = { updateAndSend(newButtons = buttons.copy(select = it)) }
                                 )
+                            }
+
+                            val psLayout = layoutConfig.getControl(ControlId.PS)
+                            EditableControl(
+                                id = ControlId.PS,
+                                layout = psLayout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.PS,
+                                onSelect = { selectedControl = ControlId.PS },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.PS,
+                                            psLayout.copy(offsetX = psLayout.offsetX + dx, offsetY = psLayout.offsetY + dy)
+                                        )
+                                    )
+                                }
+                            ) {
                                 SystemPillButton(
                                     label = "PS",
                                     isSpecial = true,
-                                    scale = centerLayout.scale,
-                                    sensitivity = effSens,
+                                    scale = psLayout.scale,
+                                    sensitivity = psLayout.sensitivity * buttonSensitivity,
                                     onPressChanged = { updateAndSend(newButtons = buttons.copy(ps = it)) }
                                 )
+                            }
+
+                            val startLayout = layoutConfig.getControl(ControlId.START)
+                            EditableControl(
+                                id = ControlId.START,
+                                layout = startLayout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.START,
+                                onSelect = { selectedControl = ControlId.START },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.START,
+                                            startLayout.copy(offsetX = startLayout.offsetX + dx, offsetY = startLayout.offsetY + dy)
+                                        )
+                                    )
+                                }
+                            ) {
                                 SystemPillButton(
                                     label = "START",
-                                    scale = centerLayout.scale,
-                                    sensitivity = effSens,
+                                    scale = startLayout.scale,
+                                    sensitivity = startLayout.sensitivity * buttonSensitivity,
                                     onPressChanged = { updateAndSend(newButtons = buttons.copy(start = it)) }
                                 )
                             }
                         }
                     }
 
-                    // RIGHT CLUSTER: Shoulders, Action Buttons, Right Stick
+                    // RIGHT COLUMN: Shoulders, Action Buttons, Right Stick
                     Column(
                         modifier = Modifier.fillMaxHeight(),
                         verticalArrangement = Arrangement.SpaceBetween,
                         horizontalAlignment = Alignment.End
                     ) {
-                        // Right Shoulders
-                        val rightShouldersLayout = layoutConfig.rightShoulders
-                        EditableCluster(
-                            type = LayoutElementType.RIGHT_SHOULDERS,
-                            layout = rightShouldersLayout,
-                            isEditMode = isEditMode,
-                            isSelected = selectedElement == LayoutElementType.RIGHT_SHOULDERS,
-                            onSelect = { selectedElement = LayoutElementType.RIGHT_SHOULDERS },
-                            onDragDelta = { dx, dy ->
-                                val updated = rightShouldersLayout.copy(
-                                    offsetX = rightShouldersLayout.offsetX + dx,
-                                    offsetY = rightShouldersLayout.offsetY + dy
-                                )
-                                onUpdateLayoutConfig(layoutConfig.updateElement(LayoutElementType.RIGHT_SHOULDERS, updated))
-                            }
-                        ) {
-                            val effSens = rightShouldersLayout.sensitivity * buttonSensitivity
-                            Row(horizontalArrangement = Arrangement.spacedBy((8 * rightShouldersLayout.scale).dp)) {
+                        // Right Shoulders (R1, R2)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val r1Layout = layoutConfig.getControl(ControlId.R1)
+                            EditableControl(
+                                id = ControlId.R1,
+                                layout = r1Layout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.R1,
+                                onSelect = { selectedControl = ControlId.R1 },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.R1,
+                                            r1Layout.copy(offsetX = r1Layout.offsetX + dx, offsetY = r1Layout.offsetY + dy)
+                                        )
+                                    )
+                                }
+                            ) {
+                                val effSens = r1Layout.sensitivity * buttonSensitivity
                                 ShoulderButton(
                                     label = "R1",
                                     width = 68.dp,
                                     height = 36.dp,
-                                    scale = rightShouldersLayout.scale,
+                                    scale = r1Layout.scale,
                                     sensitivity = effSens,
                                     onPressChanged = { isPressed ->
                                         updateAndSend(newButtons = buttons.copy(r1 = isPressed))
                                     }
                                 )
+                            }
+
+                            val r2Layout = layoutConfig.getControl(ControlId.R2)
+                            EditableControl(
+                                id = ControlId.R2,
+                                layout = r2Layout,
+                                isEditMode = isEditMode,
+                                isSelected = selectedControl == ControlId.R2,
+                                onSelect = { selectedControl = ControlId.R2 },
+                                onDragDelta = { dx, dy ->
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.R2,
+                                            r2Layout.copy(offsetX = r2Layout.offsetX + dx, offsetY = r2Layout.offsetY + dy)
+                                        )
+                                    )
+                                }
+                            ) {
+                                val effSens = r2Layout.sensitivity * buttonSensitivity
                                 ShoulderButton(
                                     label = "R2",
                                     width = 68.dp,
                                     height = 36.dp,
-                                    scale = rightShouldersLayout.scale,
+                                    scale = r2Layout.scale,
                                     sensitivity = effSens,
                                     onPressChanged = { isPressed ->
                                         val trigVal = TouchInputMapper.mapTrigger(if (isPressed) 1f else 0f, effSens)
@@ -387,19 +613,21 @@ fun ControllerScreen(
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val rightStickLayout = layoutConfig.rightStick
-                            EditableCluster(
-                                type = LayoutElementType.RIGHT_STICK,
+                            // Right Analog Stick
+                            val rightStickLayout = layoutConfig.getControl(ControlId.RIGHT_STICK)
+                            EditableControl(
+                                id = ControlId.RIGHT_STICK,
                                 layout = rightStickLayout,
                                 isEditMode = isEditMode,
-                                isSelected = selectedElement == LayoutElementType.RIGHT_STICK,
-                                onSelect = { selectedElement = LayoutElementType.RIGHT_STICK },
+                                isSelected = selectedControl == ControlId.RIGHT_STICK,
+                                onSelect = { selectedControl = ControlId.RIGHT_STICK },
                                 onDragDelta = { dx, dy ->
-                                    val updated = rightStickLayout.copy(
-                                        offsetX = rightStickLayout.offsetX + dx,
-                                        offsetY = rightStickLayout.offsetY + dy
+                                    onUpdateLayoutConfig(
+                                        layoutConfig.updateControl(
+                                            ControlId.RIGHT_STICK,
+                                            rightStickLayout.copy(offsetX = rightStickLayout.offsetX + dx, offsetY = rightStickLayout.offsetY + dy)
+                                        )
                                     )
-                                    onUpdateLayoutConfig(layoutConfig.updateElement(LayoutElementType.RIGHT_STICK, updated))
                                 }
                             ) {
                                 JoystickStick(
@@ -412,30 +640,130 @@ fun ControllerScreen(
                                 )
                             }
 
-                            val actionButtonsLayout = layoutConfig.actionButtons
-                            EditableCluster(
-                                type = LayoutElementType.ACTION_BUTTONS,
-                                layout = actionButtonsLayout,
-                                isEditMode = isEditMode,
-                                isSelected = selectedElement == LayoutElementType.ACTION_BUTTONS,
-                                onSelect = { selectedElement = LayoutElementType.ACTION_BUTTONS },
-                                onDragDelta = { dx, dy ->
-                                    val updated = actionButtonsLayout.copy(
-                                        offsetX = actionButtonsLayout.offsetX + dx,
-                                        offsetY = actionButtonsLayout.offsetY + dy
-                                    )
-                                    onUpdateLayoutConfig(layoutConfig.updateElement(LayoutElementType.ACTION_BUTTONS, updated))
-                                }
+                            // Action Buttons diamond (△, ○, ✕, □)
+                            Box(
+                                modifier = Modifier.size(176.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                val effSens = actionButtonsLayout.sensitivity * buttonSensitivity
-                                ActionButtonsPad(
-                                    scale = actionButtonsLayout.scale,
-                                    sensitivity = effSens,
-                                    onTriangle = { updateAndSend(newButtons = buttons.copy(triangle = it)) },
-                                    onCircle = { updateAndSend(newButtons = buttons.copy(circle = it)) },
-                                    onCross = { updateAndSend(newButtons = buttons.copy(cross = it)) },
-                                    onSquare = { updateAndSend(newButtons = buttons.copy(square = it)) }
-                                )
+                                // Triangle (Top)
+                                val triLayout = layoutConfig.getControl(ControlId.TRIANGLE)
+                                Box(modifier = Modifier.align(Alignment.TopCenter)) {
+                                    EditableControl(
+                                        id = ControlId.TRIANGLE,
+                                        layout = triLayout,
+                                        isEditMode = isEditMode,
+                                        isSelected = selectedControl == ControlId.TRIANGLE,
+                                        onSelect = { selectedControl = ControlId.TRIANGLE },
+                                        onDragDelta = { dx, dy ->
+                                            onUpdateLayoutConfig(
+                                                layoutConfig.updateControl(
+                                                    ControlId.TRIANGLE,
+                                                    triLayout.copy(offsetX = triLayout.offsetX + dx, offsetY = triLayout.offsetY + dy)
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        PressablePadButton(
+                                            label = "△",
+                                            accentColor = Color(0xFF10B981),
+                                            size = 56.dp,
+                                            scale = triLayout.scale,
+                                            sensitivity = triLayout.sensitivity * buttonSensitivity,
+                                            fontSize = 22,
+                                            onPressChanged = { updateAndSend(newButtons = buttons.copy(triangle = it)) }
+                                        )
+                                    }
+                                }
+
+                                // Square (Left)
+                                val sqLayout = layoutConfig.getControl(ControlId.SQUARE)
+                                Box(modifier = Modifier.align(Alignment.CenterStart)) {
+                                    EditableControl(
+                                        id = ControlId.SQUARE,
+                                        layout = sqLayout,
+                                        isEditMode = isEditMode,
+                                        isSelected = selectedControl == ControlId.SQUARE,
+                                        onSelect = { selectedControl = ControlId.SQUARE },
+                                        onDragDelta = { dx, dy ->
+                                            onUpdateLayoutConfig(
+                                                layoutConfig.updateControl(
+                                                    ControlId.SQUARE,
+                                                    sqLayout.copy(offsetX = sqLayout.offsetX + dx, offsetY = sqLayout.offsetY + dy)
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        PressablePadButton(
+                                            label = "□",
+                                            accentColor = Color(0xFFEC4899),
+                                            size = 56.dp,
+                                            scale = sqLayout.scale,
+                                            sensitivity = sqLayout.sensitivity * buttonSensitivity,
+                                            fontSize = 22,
+                                            onPressChanged = { updateAndSend(newButtons = buttons.copy(square = it)) }
+                                        )
+                                    }
+                                }
+
+                                // Circle (Right)
+                                val circLayout = layoutConfig.getControl(ControlId.CIRCLE)
+                                Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                                    EditableControl(
+                                        id = ControlId.CIRCLE,
+                                        layout = circLayout,
+                                        isEditMode = isEditMode,
+                                        isSelected = selectedControl == ControlId.CIRCLE,
+                                        onSelect = { selectedControl = ControlId.CIRCLE },
+                                        onDragDelta = { dx, dy ->
+                                            onUpdateLayoutConfig(
+                                                layoutConfig.updateControl(
+                                                    ControlId.CIRCLE,
+                                                    circLayout.copy(offsetX = circLayout.offsetX + dx, offsetY = circLayout.offsetY + dy)
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        PressablePadButton(
+                                            label = "○",
+                                            accentColor = Color(0xFFEF4444),
+                                            size = 56.dp,
+                                            scale = circLayout.scale,
+                                            sensitivity = circLayout.sensitivity * buttonSensitivity,
+                                            fontSize = 22,
+                                            onPressChanged = { updateAndSend(newButtons = buttons.copy(circle = it)) }
+                                        )
+                                    }
+                                }
+
+                                // Cross (Bottom)
+                                val crossLayout = layoutConfig.getControl(ControlId.CROSS)
+                                Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+                                    EditableControl(
+                                        id = ControlId.CROSS,
+                                        layout = crossLayout,
+                                        isEditMode = isEditMode,
+                                        isSelected = selectedControl == ControlId.CROSS,
+                                        onSelect = { selectedControl = ControlId.CROSS },
+                                        onDragDelta = { dx, dy ->
+                                            onUpdateLayoutConfig(
+                                                layoutConfig.updateControl(
+                                                    ControlId.CROSS,
+                                                    crossLayout.copy(offsetX = crossLayout.offsetX + dx, offsetY = crossLayout.offsetY + dy)
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        PressablePadButton(
+                                            label = "✕",
+                                            accentColor = Color(0xFF3B82F6),
+                                            size = 56.dp,
+                                            scale = crossLayout.scale,
+                                            sensitivity = crossLayout.sensitivity * buttonSensitivity,
+                                            fontSize = 20,
+                                            onPressChanged = { updateAndSend(newButtons = buttons.copy(cross = it)) }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -443,23 +771,23 @@ fun ControllerScreen(
 
                 // EDIT MODE FLOATING INSPECTOR TOOLBAR
                 if (isEditMode) {
-                    val selType = selectedElement ?: LayoutElementType.ACTION_BUTTONS
-                    val currentElemLayout = layoutConfig.getElement(selType)
+                    val currentControlLayout = layoutConfig.getControl(selectedControl)
 
                     EditInspectorToolbar(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .fillMaxWidth(0.85f),
-                        selectedType = selType,
-                        elementLayout = currentElemLayout,
-                        onUpdate = { newElem ->
-                            onUpdateLayoutConfig(layoutConfig.updateElement(selType, newElem))
+                            .fillMaxWidth(0.92f),
+                        selectedControl = selectedControl,
+                        controlLayout = currentControlLayout,
+                        onSelectControl = { selectedControl = it },
+                        onUpdate = { newLayout ->
+                            onUpdateLayoutConfig(layoutConfig.updateControl(selectedControl, newLayout))
                         },
                         onResetCurrent = {
-                            onUpdateLayoutConfig(layoutConfig.updateElement(selType, ElementLayout()))
+                            onUpdateLayoutConfig(layoutConfig.resetControl(selectedControl))
                         },
                         onResetAll = {
-                            onUpdateLayoutConfig(ControllerLayoutConfig())
+                            onUpdateLayoutConfig(layoutConfig.resetAll())
                         },
                         onDone = {
                             onEditModeChanged(false)
@@ -472,28 +800,33 @@ fun ControllerScreen(
 }
 
 @Composable
-private fun EditableCluster(
-    type: LayoutElementType,
-    layout: ElementLayout,
+private fun EditableControl(
+    id: ControlId,
+    layout: ControlLayout,
     isEditMode: Boolean,
     isSelected: Boolean,
     onSelect: () -> Unit,
     onDragDelta: (Float, Float) -> Unit,
     content: @Composable () -> Unit
 ) {
-    val borderModifier = if (isEditMode) {
+    val offsetModifier = Modifier.offset {
+        IntOffset(layout.offsetX.roundToInt(), layout.offsetY.roundToInt())
+    }
+    val alphaModifier = Modifier.alpha(layout.opacity.coerceIn(0.15f, 1.0f))
+
+    val editModifier = if (isEditMode) {
         Modifier
             .border(
                 width = if (isSelected) 2.dp else 1.dp,
                 color = if (isSelected) Color(0xFF6366F1) else Color(0x5594A3B8),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .background(
-                if (isSelected) Color(0x226366F1) else Color.Transparent,
-                RoundedCornerShape(12.dp)
+                if (isSelected) Color(0x336366F1) else Color.Transparent,
+                RoundedCornerShape(8.dp)
             )
-            .padding(4.dp)
-            .pointerInput(type) {
+            .padding(2.dp)
+            .pointerInput(id) {
                 detectDragGestures(
                     onDragStart = { onSelect() },
                     onDrag = { change, dragAmount ->
@@ -508,22 +841,22 @@ private fun EditableCluster(
     }
 
     Box(
-        modifier = Modifier
-            .offset { IntOffset(layout.offsetX.roundToInt(), layout.offsetY.roundToInt()) }
-            .then(borderModifier),
+        modifier = offsetModifier
+            .then(alphaModifier)
+            .then(editModifier),
         contentAlignment = Alignment.Center
     ) {
         content()
         if (isEditMode && isSelected) {
             Text(
-                text = type.displayName,
+                text = id.displayName,
                 color = Color(0xFFA5B4FC),
-                fontSize = 9.sp,
+                fontSize = 8.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .background(Color(0xDD1E1B4B), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .background(Color(0xDD1E1B4B), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 3.dp, vertical = 1.dp)
             )
         }
     }
@@ -532,9 +865,10 @@ private fun EditableCluster(
 @Composable
 private fun EditInspectorToolbar(
     modifier: Modifier = Modifier,
-    selectedType: LayoutElementType,
-    elementLayout: ElementLayout,
-    onUpdate: (ElementLayout) -> Unit,
+    selectedControl: ControlId,
+    controlLayout: ControlLayout,
+    onSelectControl: (ControlId) -> Unit,
+    onUpdate: (ControlLayout) -> Unit,
     onResetCurrent: () -> Unit,
     onResetAll: () -> Unit,
     onDone: () -> Unit
@@ -547,27 +881,53 @@ private fun EditInspectorToolbar(
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF374151))
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Header: Element Title and Done Button
+            // Header Row: Control selector & Action buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("✏️ Layout Editor: ", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                // Control Picker / Name
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val allControls = ControlId.values()
+                    val currentIndex = allControls.indexOf(selectedControl)
+
+                    IconButton(
+                        onClick = {
+                            val prevIndex = if (currentIndex > 0) currentIndex - 1 else allControls.size - 1
+                            onSelectControl(allControls[prevIndex])
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous Control", tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
+
+                    Text("🎯 ", fontSize = 12.sp)
                     Text(
-                        selectedType.displayName,
+                        selectedControl.displayName,
                         color = Color(0xFF60A5FA),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
+
+                    IconButton(
+                        onClick = {
+                            val nextIndex = if (currentIndex < allControls.size - 1) currentIndex + 1 else 0
+                            onSelectControl(allControls[nextIndex])
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next Control", tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
                 }
+
+                // Action buttons: Reset This, Reset All, Done
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = onResetCurrent) {
-                        Text("Reset This", color = Color(0xFFF87171), fontSize = 11.sp)
+                        Text("Reset Control", color = Color(0xFFF87171), fontSize = 11.sp)
                     }
                     TextButton(onClick = onResetAll) {
                         Text("Reset All", color = Color(0xFF94A3B8), fontSize = 11.sp)
@@ -584,36 +944,36 @@ private fun EditInspectorToolbar(
                 }
             }
 
-            // Controls Row: Size Scale, Sensitivity, Nudge Arrows
+            // Sliders Row: Size Scale, Sensitivity, Opacity & Nudge
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Size Scale Controls
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.weight(1.1f)
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text("Size:", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    Text("Size:", color = Color(0xFFCBD5E1), fontSize = 10.sp)
                     IconButton(
-                        onClick = { onUpdate(elementLayout.copy(scale = (elementLayout.scale - 0.05f).coerceIn(0.6f, 1.8f))) },
-                        modifier = Modifier.size(22.dp)
+                        onClick = { onUpdate(controlLayout.copy(scale = (controlLayout.scale - 0.05f).coerceIn(0.5f, 2.0f))) },
+                        modifier = Modifier.size(20.dp)
                     ) {
-                        Icon(Icons.Default.Remove, contentDescription = "Smaller", tint = Color.White, modifier = Modifier.size(12.dp))
+                        Icon(Icons.Default.Remove, contentDescription = "Smaller", tint = Color.White, modifier = Modifier.size(11.dp))
                     }
-                    Text("${(elementLayout.scale * 100).toInt()}%", color = Color(0xFF60A5FA), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("${(controlLayout.scale * 100).toInt()}%", color = Color(0xFF60A5FA), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     IconButton(
-                        onClick = { onUpdate(elementLayout.copy(scale = (elementLayout.scale + 0.05f).coerceIn(0.6f, 1.8f))) },
-                        modifier = Modifier.size(22.dp)
+                        onClick = { onUpdate(controlLayout.copy(scale = (controlLayout.scale + 0.05f).coerceIn(0.5f, 2.0f))) },
+                        modifier = Modifier.size(20.dp)
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "Larger", tint = Color.White, modifier = Modifier.size(12.dp))
+                        Icon(Icons.Default.Add, contentDescription = "Larger", tint = Color.White, modifier = Modifier.size(11.dp))
                     }
                     Slider(
-                        value = elementLayout.scale,
-                        onValueChange = { onUpdate(elementLayout.copy(scale = it)) },
-                        valueRange = 0.6f..1.8f,
+                        value = controlLayout.scale,
+                        onValueChange = { onUpdate(controlLayout.copy(scale = it)) },
+                        valueRange = 0.5f..2.0f,
                         colors = SliderDefaults.colors(
                             thumbColor = Color(0xFF60A5FA),
                             activeTrackColor = Color(0xFF60A5FA),
@@ -627,26 +987,26 @@ private fun EditInspectorToolbar(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.weight(1.1f)
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text("Sens:", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    Text("Sens:", color = Color(0xFFCBD5E1), fontSize = 10.sp)
                     IconButton(
-                        onClick = { onUpdate(elementLayout.copy(sensitivity = (elementLayout.sensitivity - 0.1f).coerceIn(0.5f, 2.5f))) },
-                        modifier = Modifier.size(22.dp)
+                        onClick = { onUpdate(controlLayout.copy(sensitivity = (controlLayout.sensitivity - 0.1f).coerceIn(0.2f, 3.0f))) },
+                        modifier = Modifier.size(20.dp)
                     ) {
-                        Icon(Icons.Default.Remove, contentDescription = "Less", tint = Color.White, modifier = Modifier.size(12.dp))
+                        Icon(Icons.Default.Remove, contentDescription = "Less", tint = Color.White, modifier = Modifier.size(11.dp))
                     }
-                    Text(String.format("%.1fx", elementLayout.sensitivity), color = Color(0xFF10B981), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(String.format("%.1fx", controlLayout.sensitivity), color = Color(0xFF10B981), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     IconButton(
-                        onClick = { onUpdate(elementLayout.copy(sensitivity = (elementLayout.sensitivity + 0.1f).coerceIn(0.5f, 2.5f))) },
-                        modifier = Modifier.size(22.dp)
+                        onClick = { onUpdate(controlLayout.copy(sensitivity = (controlLayout.sensitivity + 0.1f).coerceIn(0.2f, 3.0f))) },
+                        modifier = Modifier.size(20.dp)
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "More", tint = Color.White, modifier = Modifier.size(12.dp))
+                        Icon(Icons.Default.Add, contentDescription = "More", tint = Color.White, modifier = Modifier.size(11.dp))
                     }
                     Slider(
-                        value = elementLayout.sensitivity,
-                        onValueChange = { onUpdate(elementLayout.copy(sensitivity = it)) },
-                        valueRange = 0.5f..2.5f,
+                        value = controlLayout.sensitivity,
+                        onValueChange = { onUpdate(controlLayout.copy(sensitivity = it)) },
+                        valueRange = 0.2f..3.0f,
                         colors = SliderDefaults.colors(
                             thumbColor = Color(0xFF10B981),
                             activeTrackColor = Color(0xFF10B981),
@@ -656,35 +1016,35 @@ private fun EditInspectorToolbar(
                     )
                 }
 
-                // Position Nudge Buttons
+                // Nudge Buttons (fine offset adjustment)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text("Nudge:", color = Color(0xFF94A3B8), fontSize = 10.sp)
                     IconButton(
-                        onClick = { onUpdate(elementLayout.copy(offsetX = elementLayout.offsetX - 6f)) },
-                        modifier = Modifier.size(24.dp)
+                        onClick = { onUpdate(controlLayout.copy(offsetX = controlLayout.offsetX - 5f)) },
+                        modifier = Modifier.size(22.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Left", tint = Color.White, modifier = Modifier.size(14.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Left", tint = Color.White, modifier = Modifier.size(12.dp))
                     }
                     IconButton(
-                        onClick = { onUpdate(elementLayout.copy(offsetY = elementLayout.offsetY - 6f)) },
-                        modifier = Modifier.size(24.dp)
+                        onClick = { onUpdate(controlLayout.copy(offsetY = controlLayout.offsetY - 5f)) },
+                        modifier = Modifier.size(22.dp)
                     ) {
-                        Icon(Icons.Default.ArrowUpward, contentDescription = "Up", tint = Color.White, modifier = Modifier.size(14.dp))
+                        Icon(Icons.Default.ArrowUpward, contentDescription = "Up", tint = Color.White, modifier = Modifier.size(12.dp))
                     }
                     IconButton(
-                        onClick = { onUpdate(elementLayout.copy(offsetY = elementLayout.offsetY + 6f)) },
-                        modifier = Modifier.size(24.dp)
+                        onClick = { onUpdate(controlLayout.copy(offsetY = controlLayout.offsetY + 5f)) },
+                        modifier = Modifier.size(22.dp)
                     ) {
-                        Icon(Icons.Default.ArrowDownward, contentDescription = "Down", tint = Color.White, modifier = Modifier.size(14.dp))
+                        Icon(Icons.Default.ArrowDownward, contentDescription = "Down", tint = Color.White, modifier = Modifier.size(12.dp))
                     }
                     IconButton(
-                        onClick = { onUpdate(elementLayout.copy(offsetX = elementLayout.offsetX + 6f)) },
-                        modifier = Modifier.size(24.dp)
+                        onClick = { onUpdate(controlLayout.copy(offsetX = controlLayout.offsetX + 5f)) },
+                        modifier = Modifier.size(22.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Right", tint = Color.White, modifier = Modifier.size(14.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Right", tint = Color.White, modifier = Modifier.size(12.dp))
                     }
                 }
             }
@@ -695,6 +1055,7 @@ private fun EditInspectorToolbar(
 @Composable
 private fun TopStatusBar(
     status: ConnectionStatus,
+    transport: String,
     host: String,
     port: Int,
     error: String?,
@@ -705,7 +1066,7 @@ private fun TopStatusBar(
     onOpenSettings: () -> Unit
 ) {
     val statusColor = when (status) {
-        ConnectionStatus.CONNECTED -> Color(0xFF10B981)
+        ConnectionStatus.CONNECTED -> if (transport == "USB") Color(0xFF10B981) else Color(0xFF0EA5E9)
         ConnectionStatus.CONNECTING, ConnectionStatus.PAIRING -> Color(0xFFF59E0B)
         ConnectionStatus.DISCONNECTED -> Color(0xFF6B7280)
         ConnectionStatus.ERROR -> Color(0xFFEF4444)
@@ -728,9 +1089,10 @@ private fun TopStatusBar(
                     .clip(CircleShape)
                     .background(statusColor)
             )
+            val transportLabel = if (status == ConnectionStatus.CONNECTED && transport != "DISCONNECTED") " ($transport)" else ""
             Text(
-                text = "$status: $host:$port",
-                color = Color(0xFFCBD5E1),
+                text = "$status$transportLabel: $host:$port",
+                color = if (status == ConnectionStatus.CONNECTED) (if (transport == "USB") Color(0xFF34D399) else Color(0xFF38BDF8)) else Color(0xFFCBD5E1),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium
             )

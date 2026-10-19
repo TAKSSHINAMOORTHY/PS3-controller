@@ -1,7 +1,8 @@
 package com.antigravity.ps3controller.ui.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -37,51 +38,49 @@ fun JoystickStick(
     Box(
         modifier = modifier
             .size(size)
-            .pointerInput(deadZone, sensitivity) {
+            .pointerInput(deadZone, sensitivity, size) {
+                val center = Offset(size.toPx() / 2f, size.toPx() / 2f)
                 val maxRadius = (size.toPx() / 2f) * 0.7f
 
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        isDragging = true
-                        val center = Offset(size.toPx() / 2f, size.toPx() / 2f)
-                        val dx = offset.x - center.x
-                        val dy = offset.y - center.y
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val pointerId = down.id
+                    isDragging = true
+
+                    fun updateStickPosition(touchPos: Offset) {
+                        val dx = touchPos.x - center.x
+                        val dy = touchPos.y - center.y
                         val dist = hypot(dx, dy)
                         val clampedDist = min(dist, maxRadius)
-                        val angle = if (dist > 0) dx / dist to dy / dist else 0f to 0f
+                        val angle = if (dist > 0f) (dx / dist) to (dy / dist) else 0f to 0f
+
                         knobOffsetX = angle.first * clampedDist
                         knobOffsetY = angle.second * clampedDist
 
                         val result = TouchInputMapper.mapStick(dx, dy, maxRadius, deadZone, sensitivity)
                         onMove(result.x, result.y)
-                    },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        val newX = knobOffsetX + dragAmount.x
-                        val newY = knobOffsetY + dragAmount.y
-                        val dist = hypot(newX, newY)
-                        val clampedDist = min(dist, maxRadius)
-                        val angle = if (dist > 0) newX / dist to newY / dist else 0f to 0f
+                    }
 
-                        knobOffsetX = angle.first * clampedDist
-                        knobOffsetY = angle.second * clampedDist
+                    down.consume()
+                    updateStickPosition(down.position)
 
-                        val result = TouchInputMapper.mapStick(newX, newY, maxRadius, deadZone, sensitivity)
-                        onMove(result.x, result.y)
-                    },
-                    onDragEnd = {
-                        isDragging = false
-                        knobOffsetX = 0f
-                        knobOffsetY = 0f
-                        onMove(0f, 0f)
-                    },
-                    onDragCancel = {
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == pointerId }
+                            if (change == null || !change.pressed) {
+                                break
+                            }
+                            change.consume()
+                            updateStickPosition(change.position)
+                        }
+                    } finally {
                         isDragging = false
                         knobOffsetX = 0f
                         knobOffsetY = 0f
                         onMove(0f, 0f)
                     }
-                )
+                }
             }
     ) {
         Canvas(modifier = Modifier.size(size)) {

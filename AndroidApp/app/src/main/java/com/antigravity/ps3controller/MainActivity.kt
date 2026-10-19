@@ -33,13 +33,16 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("ps3_controller_prefs", Context.MODE_PRIVATE)
 
         setContent {
-            var host by remember {
-                val intentHost = intent?.getStringExtra("host")
-                val defaultHost = intentHost ?: prefs.getString("host", "127.0.0.1") ?: "127.0.0.1"
-                if (intentHost != null) {
-                    prefs.edit().putString("host", intentHost).apply()
-                }
+            var wifiHost by remember {
+                val intentHost = intent?.getStringExtra("wifi_host") ?: intent?.getStringExtra("host")
+                val defaultHost = intentHost ?: prefs.getString("wifi_host", "192.168.1.20") ?: "192.168.1.20"
                 mutableStateOf(defaultHost)
+            }
+            var usbHost by remember {
+                mutableStateOf(prefs.getString("usb_host", "127.0.0.1") ?: "127.0.0.1")
+            }
+            var transportPrefName by remember {
+                mutableStateOf(prefs.getString("transport_pref", "AUTO") ?: "AUTO")
             }
             var port by remember {
                 val intentPort = intent?.getIntExtra("port", 0)?.takeIf { it > 0 }
@@ -56,9 +59,20 @@ class MainActivity : ComponentActivity() {
             var isEditMode by remember { mutableStateOf(false) }
             var isSettingsOpen by remember { mutableStateOf(false) }
 
-            val activeClient = remember(host, port) {
+            val transportPref = when (transportPrefName) {
+                "FORCE_USB" -> com.antigravity.ps3controller.network.TransportPreference.FORCE_USB
+                "FORCE_WIFI" -> com.antigravity.ps3controller.network.TransportPreference.FORCE_WIFI
+                else -> com.antigravity.ps3controller.network.TransportPreference.AUTO_PREFER_USB
+            }
+
+            val activeClient = remember(usbHost, wifiHost, port, transportPref) {
                 client?.disconnect()
-                GamepadClient(host, port).also {
+                GamepadClient(
+                    usbHost = usbHost,
+                    wifiHost = wifiHost,
+                    serverPort = port,
+                    transportPreference = transportPref
+                ).also {
                     client = it
                 }
             }
@@ -70,7 +84,7 @@ class MainActivity : ComponentActivity() {
 
             ControllerScreen(
                 client = activeClient,
-                host = host,
+                host = activeClient.serverHost,
                 port = port,
                 deadZone = deadZone,
                 sensitivity = sensitivity,
@@ -88,18 +102,21 @@ class MainActivity : ComponentActivity() {
 
             if (isSettingsOpen) {
                 SettingsDialog(
-                    initialHost = host,
+                    initialHost = wifiHost,
                     initialPort = port,
                     initialDeadZone = deadZone,
                     initialSensitivity = sensitivity,
                     initialButtonSensitivity = buttonSensitivity,
                     initialHaptics = haptics,
+                    initialTransportPref = transportPrefName,
+                    initialWifiHost = wifiHost,
                     onDismiss = { isSettingsOpen = false },
                     onEnterEditMode = {
                         isEditMode = true
                     },
-                    onSave = { newHost, newPort, newDeadZone, newSensitivity, newButtonSensitivity, newHaptics ->
-                        host = newHost
+                    onSave = { newWifiHost, newTransportPref, newPort, newDeadZone, newSensitivity, newButtonSensitivity, newHaptics ->
+                        wifiHost = newWifiHost
+                        transportPrefName = newTransportPref
                         port = newPort
                         deadZone = newDeadZone
                         sensitivity = newSensitivity
@@ -107,7 +124,8 @@ class MainActivity : ComponentActivity() {
                         haptics = newHaptics
 
                         prefs.edit()
-                            .putString("host", newHost)
+                            .putString("wifi_host", newWifiHost)
+                            .putString("transport_pref", newTransportPref)
                             .putInt("port", newPort)
                             .putFloat("deadzone", newDeadZone)
                             .putFloat("sensitivity", newSensitivity)

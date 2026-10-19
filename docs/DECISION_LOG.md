@@ -62,3 +62,24 @@
 - Decision: Provide both a global button/trigger sensitivity slider in the Settings Dialog (0.5x to 2.5x) and a per-cluster sensitivity multiplier in the Edit Mode Inspector. The effective sensitivity scales the pressure thresholds for buttons and applies a responsive curve `clamp(value * sensitivity, 0.0, 1.0)` to analog triggers (L2/R2) in `TouchInputMapper`.
 - Reason: Enables players to tune hair-trigger responsiveness for fast-paced action or set lower sensitivity for high-precision throttle control in racing titles.
 
+## D-011 — AwaitEachGesture Pointer-ID Tracking & Immediate Neutral Dispatch
+- Status: Accepted
+- Decision: Replace `detectDragGestures` in `JoystickStick.kt` with `awaitEachGesture` pointer-ID tracking and calculate stick displacement using absolute `touchPos - center`. In `GamepadClient.kt`, exempt neutral/release state transitions from 60Hz rate limiting, while buffering trailing updates to guarantee the final (0, 0) resting state is always sent.
+- Reason: `detectDragGestures` accumulated deltas on a clamped variable, causing persistent stick drift when dragging outside the stick radius, and rate-limiting dropped the final release packet if it occurred within 16ms of the prior touch move.
+- Consequence: Completely eliminates stick drift and stuck movement on finger lift.
+
+## D-012 — Dual-Mapped RPCS3 Native Input Adapter with Clean Event Tap
+- Status: Accepted
+- Decision: In `RPCS3DirectInputAdapter.swift`, map the right analog stick to RPCS3's native `Default.yml` Player 1 keyboard bindings (Up: Home 115, Down: End 119, Left: Forward Delete 117, Right: Page Down 121) alongside IKJL aliases. Map L3 to F (keycode 3) and PS to Backspace (keycode 51). Use `CGEventSource(stateID: .hidSystemState)` and eliminate arbitrary mouse clicks.
+- Reason: RPCS3's default keyboard handler was configured for navigation keys rather than IKJL for the right stick. Synthetic mouse clicks at (500, 100) caused focus issues during cutscenes and menus.
+
+## D-013 — Resilient Stream Buffer Framing & Extended Inactivity Timeout
+- Status: Accepted
+- Decision: Upgrade `ControllerServer` to parse all WebSocket frames present in a stream buffer via `extractAllWebSocketPayloads`, and increase session timeout to 8.0 seconds of idle time.
+- Reason: Cutscenes and menus often involve zero touch input for multiple seconds. Short timeouts coupled with dropped trailing frames caused unexpected session resets.
+
+## D-014 — Granular 19-Control Independent Layout Model
+- Status: Accepted
+- Decision: Replace coarse 7-cluster layout model with a granular `ControlId` enumeration covering all 19 individual controls (Cross, Circle, Square, Triangle, D-pad Up/Down/Left/Right, L1, R1, L2, R2, L3, R3, Start, Select, PS, Left Stick, Right Stick). Each control stores independent position $(x, y)$, scale factor, opacity, and sensitivity in `ControllerLayoutConfig`.
+- Reason: Users require complete freedom to reposition or resize each individual button (e.g. moving D-pad Up without affecting Down/Left/Right, or resizing Cross without resizing Square).
+

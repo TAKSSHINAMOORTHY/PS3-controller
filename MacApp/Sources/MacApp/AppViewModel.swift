@@ -53,9 +53,9 @@ public final class AppViewModel: ObservableObject {
 
     public func startServices() {
         let port = UInt16(portString) ?? 6000
-        addLog("Initializing DriverKit GamerPad backend...")
+        addLog("Initializing RPCS3 Direct Input Gamepad backend...")
 
-        let adapter = DriverKitGamerPadAdapter(host: "127.0.0.1", port: 8080)
+        let adapter = RPCS3DirectInputAdapter()
         self.backend = adapter
 
         Task {
@@ -66,8 +66,8 @@ public final class AppViewModel: ObservableObject {
                 self.addLog("Backend connected successfully.")
             } catch {
                 self.isBackendConnected = false
-                self.backendStatusText = "Unavailable (DriverKit daemon not running)"
-                self.addLog("DriverKit adapter connection failed: \(error.localizedDescription). (Using fallback)")
+                self.backendStatusText = "Unavailable (\(error.localizedDescription))"
+                self.addLog("Adapter connection failed: \(error.localizedDescription)")
             }
         }
 

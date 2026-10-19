@@ -45,11 +45,14 @@ fun SettingsDialog(
     initialSensitivity: Float,
     initialButtonSensitivity: Float,
     initialHaptics: Boolean,
+    initialTransportPref: String = "AUTO",
+    initialWifiHost: String = "192.168.1.20",
     onDismiss: () -> Unit,
     onEnterEditMode: () -> Unit,
-    onSave: (host: String, port: Int, deadZone: Float, sensitivity: Float, buttonSensitivity: Float, haptics: Boolean) -> Unit
+    onSave: (wifiHost: String, transportPref: String, port: Int, deadZone: Float, sensitivity: Float, buttonSensitivity: Float, haptics: Boolean) -> Unit
 ) {
-    var host by remember { mutableStateOf(initialHost) }
+    var wifiHost by remember { mutableStateOf(initialWifiHost) }
+    var transportPref by remember { mutableStateOf(initialTransportPref) }
     var portText by remember { mutableStateOf(initialPort.toString()) }
     var deadZone by remember { mutableFloatStateOf(initialDeadZone) }
     var sensitivity by remember { mutableFloatStateOf(initialSensitivity) }
@@ -93,12 +96,49 @@ fun SettingsDialog(
                 }
             }
 
-            // Host & Port Row
+            // Transport Mode Selection
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "Connection Transport Priority",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val options = listOf(
+                        "AUTO" to "⚡ Auto (Prefer USB)",
+                        "FORCE_USB" to "🔌 USB Only",
+                        "FORCE_WIFI" to "📶 Wi-Fi Only"
+                    )
+                    options.forEach { (key, label) ->
+                        val isSelected = transportPref == key
+                        Button(
+                            onClick = { transportPref = key },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(32.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) Color(0xFF2563EB) else Color(0xFF334155),
+                                contentColor = if (isSelected) Color.White else Color(0xFF94A3B8)
+                            ),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(label, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+                }
+            }
+
+            // Wi-Fi Host & Port Row
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
-                    value = host,
-                    onValueChange = { host = it },
-                    label = { Text("Mac IP Address", color = Color(0xFF94A3B8), fontSize = 11.sp) },
+                    value = wifiHost,
+                    onValueChange = { wifiHost = it },
+                    label = { Text("Mac Wi-Fi IP Address", color = Color(0xFF94A3B8), fontSize = 11.sp) },
                     singleLine = true,
                     modifier = Modifier.weight(2f),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -210,7 +250,7 @@ fun SettingsDialog(
                 Button(
                     onClick = {
                         val parsedPort = portText.toIntOrNull() ?: 6000
-                        onSave(host.trim(), parsedPort, deadZone, sensitivity, buttonSensitivity, haptics)
+                        onSave(wifiHost.trim(), transportPref, parsedPort, deadZone, sensitivity, buttonSensitivity, haptics)
                         onDismiss()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),

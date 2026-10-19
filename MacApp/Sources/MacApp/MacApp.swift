@@ -30,7 +30,7 @@ struct Launcher {
             port = customPort
         }
         print("[PS3-Companion] Starting in headless mode on port \(port)...")
-        let adapter = DriverKitGamerPadAdapter(host: "127.0.0.1", port: 8080)
+        let adapter = RPCS3DirectInputAdapter()
         let server = ControllerServer(port: port, backend: adapter)
 
         server.onStatusChanged = { status in
@@ -43,9 +43,9 @@ struct Launcher {
         Task {
             do {
                 try await adapter.connect()
-                print("[PS3-Companion] Connected to DriverKit backend.")
+                print("[PS3-Companion] Connected to \(adapter.deviceName)")
             } catch {
-                print("[PS3-Companion] DriverKit connection warning: \(error.localizedDescription)")
+                print("[PS3-Companion] Backend connection warning: \(error.localizedDescription)")
             }
         }
 

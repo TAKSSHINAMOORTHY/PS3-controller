@@ -21,6 +21,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
@@ -32,11 +33,30 @@ enum class ConnectionStatus {
     ERROR
 }
 
+enum class TransportPreference {
+    AUTO_PREFER_USB,
+    FORCE_USB,
+    FORCE_WIFI
+}
+
 class GamepadClient(
-    val serverHost: String,
-    val serverPort: Int,
+    val usbHost: String = "127.0.0.1",
+    val wifiHost: String = "192.168.1.20",
+    val serverPort: Int = 6000,
+    val transportPreference: TransportPreference = TransportPreference.AUTO_PREFER_USB,
     private val clientName: String = "Android PS3 Gamepad"
 ) {
+    // Backwards-compatible constructor for single host
+    constructor(serverHost: String, serverPort: Int, clientName: String = "Android PS3 Gamepad") : this(
+        usbHost = if (serverHost == "127.0.0.1") "127.0.0.1" else serverHost,
+        wifiHost = if (serverHost != "127.0.0.1") serverHost else "192.168.1.20",
+        serverPort = serverPort,
+        transportPreference = if (serverHost == "127.0.0.1") TransportPreference.AUTO_PREFER_USB else TransportPreference.FORCE_WIFI,
+        clientName = clientName
+    )
+
+    val serverHost: String get() = _activeHost.value
+
     private val json = Json {
         encodeDefaults = true
         ignoreUnknownKeys = true
@@ -45,6 +65,12 @@ class GamepadClient(
 
     private val _status = MutableStateFlow(ConnectionStatus.DISCONNECTED)
     val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
+
+    private val _activeTransport = MutableStateFlow("DISCONNECTED")
+    val activeTransport: StateFlow<String> = _activeTransport.asStateFlow()
+
+    private val _activeHost = MutableStateFlow(usbHost)
+    val activeHost: StateFlow<String> = _activeHost.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
@@ -62,6 +88,30 @@ class GamepadClient(
         .retryOnConnectionFailure(true)
         .build()
 
+    private suspend fun resolveTargetHost(): Pair<String, String> = withContext(Dispatchers.IO) {
+        when (transportPreference) {
+            TransportPreference.FORCE_USB -> Pair(usbHost, "USB")
+            TransportPreference.FORCE_WIFI -> Pair(wifiHost, "Wi-Fi")
+            TransportPreference.AUTO_PREFER_USB -> {
+                // Probe USB (127.0.0.1:serverPort) first with quick 300ms socket probe
+                val isUsbAvailable = try {
+                    java.net.Socket().use { s ->
+                        s.connect(java.net.InetSocketAddress(usbHost, serverPort), 300)
+                        true
+                    }
+                } catch (_: Exception) {
+                    false
+                }
+
+                if (isUsbAvailable) {
+                    Pair(usbHost, "USB")
+                } else {
+                    Pair(wifiHost, "Wi-Fi")
+                }
+            }
+        }
+    }
+
     fun connect() {
         isExplicitDisconnect = false
         if (_status.value == ConnectionStatus.CONNECTING || _status.value == ConnectionStatus.CONNECTED) {
@@ -71,39 +121,45 @@ class GamepadClient(
         _status.value = ConnectionStatus.CONNECTING
         _errorMessage.value = null
 
-        val url = "ws://$serverHost:$serverPort"
-        Log.i("GamepadClient", "Connecting to $url...")
-        val request = Request.Builder().url(url).build()
+        scope.launch {
+            val (resolvedHost, transportName) = resolveTargetHost()
+            _activeHost.value = resolvedHost
+            _activeTransport.value = transportName
 
-        webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.i("GamepadClient", "WebSocket onOpen! Sending PairRequest...")
-                _status.value = ConnectionStatus.PAIRING
-                // Send pair request
-                val pairReq = PairRequest(
-                    clientName = clientName,
-                    clientId = "android-${System.currentTimeMillis() % 10000}",
-                    protocolVersion = 1,
-                    pairingCode = "1234"
-                )
-                webSocket.send(json.encodeToString(pairReq))
-            }
+            val url = "ws://$resolvedHost:$serverPort"
+            Log.i("GamepadClient", "Connecting via $transportName to $url...")
+            val request = Request.Builder().url(url).build()
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.i("GamepadClient", "onMessage: $text")
-                handleIncomingMessage(text)
-            }
+            webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.i("GamepadClient", "WebSocket onOpen via $transportName! Sending PairRequest...")
+                    _status.value = ConnectionStatus.PAIRING
+                    // Send pair request
+                    val pairReq = PairRequest(
+                        clientName = clientName,
+                        clientId = "android-${System.currentTimeMillis() % 10000}",
+                        protocolVersion = 1,
+                        pairingCode = "1234"
+                    )
+                    webSocket.send(json.encodeToString(pairReq))
+                }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.w("GamepadClient", "onClosed: $reason ($code)")
-                handleDisconnect("Closed: $reason ($code)")
-            }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    Log.i("GamepadClient", "onMessage: $text")
+                    handleIncomingMessage(text)
+                }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e("GamepadClient", "onFailure: ${t.localizedMessage}", t)
-                handleDisconnect("Failed: ${t.localizedMessage ?: "Unknown error"}")
-            }
-        })
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    Log.w("GamepadClient", "onClosed: $reason ($code)")
+                    handleDisconnect("Closed: $reason ($code)")
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.e("GamepadClient", "onFailure: ${t.localizedMessage}", t)
+                    handleDisconnect("Failed: ${t.localizedMessage ?: "Unknown error"}")
+                }
+            })
+        }
     }
 
     private fun handleIncomingMessage(text: String) {
@@ -125,24 +181,60 @@ class GamepadClient(
         }
     }
 
+    private var pendingState: ControllerState? = null
+    private var trailingSendJob: Job? = null
+
+    private fun isNeutralState(state: ControllerState): Boolean {
+        val b = state.buttons
+        val d = state.dpad
+        val a = state.axes
+        val t = state.triggers
+        return !b.cross && !b.circle && !b.square && !b.triangle &&
+               !b.l1 && !b.r1 && !b.l2 && !b.r2 && !b.l3 && !b.r3 &&
+               !b.start && !b.select && !b.ps &&
+               !d.up && !d.down && !d.left && !d.right &&
+               a.lx == 0f && a.ly == 0f && a.rx == 0f && a.ry == 0f &&
+               t.l2 == 0f && t.r2 == 0f
+    }
+
     fun sendState(state: ControllerState) {
         val ws = webSocket ?: return
         val session = activeSessionId ?: return
         if (_status.value != ConnectionStatus.CONNECTED) return
 
         val now = System.currentTimeMillis()
-        // Rate limit to ~60 Hz (16ms)
-        if (now - lastSentTime < 16) {
-            return
-        }
-        lastSentTime = now
+        val timeSinceLast = now - lastSentTime
+        val isNeutral = isNeutralState(state)
 
-        val seq = sequenceNumber.incrementAndGet()
-        val outbound = state.copy(sessionId = session, seq = seq, timestamp = now)
-        try {
-            val payload = json.encodeToString(outbound)
-            ws.send(payload)
-        } catch (_: Exception) {}
+        // Neutral / release states must never be dropped to avoid stuck inputs.
+        if (isNeutral || timeSinceLast >= 16) {
+            trailingSendJob?.cancel()
+            trailingSendJob = null
+            pendingState = null
+            lastSentTime = now
+
+            val seq = sequenceNumber.incrementAndGet()
+            val outbound = state.copy(sessionId = session, seq = seq, timestamp = now)
+            try {
+                val payload = json.encodeToString(outbound)
+                ws.send(payload)
+            } catch (_: Exception) {}
+        } else {
+            // Buffer latest motion state so trailing final position is never lost
+            pendingState = state
+            if (trailingSendJob == null) {
+                val delayMs = (16 - timeSinceLast).coerceIn(1, 16)
+                trailingSendJob = scope.launch {
+                    delay(delayMs)
+                    val toSend = pendingState
+                    pendingState = null
+                    trailingSendJob = null
+                    if (toSend != null) {
+                        sendState(toSend)
+                    }
+                }
+            }
+        }
     }
 
     private fun startHeartbeat() {
