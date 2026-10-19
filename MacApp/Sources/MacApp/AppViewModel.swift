@@ -19,23 +19,65 @@ public final class AppViewModel: ObservableObject {
     @Published public var isAccessibilityGranted: Bool = true
     @Published public var usbStatusText: String = "Checking..."
     @Published public var isUsbAdbConfigured: Bool = false
+    @Published public var isStarting: Bool = false
 
     private var server: ControllerServer?
     private var backend: GamepadBackend?
+    private var retryCount: Int = 0
+    private var accessibilityCancellable: AnyCancellable?
 
     public init() {
         refreshNetworkInterfaces()
         refreshAccessibilityStatus()
+        setupAccessibilityMonitor()
+    }
+
+    public func setupAccessibilityMonitor() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAccessibilityStatus()
+            }
+        }
+
+        accessibilityCancellable = Timer.publish(every: 1.5, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                if !self.isAccessibilityGranted {
+                    self.refreshAccessibilityStatus()
+                }
+            }
     }
 
     public func refreshAccessibilityStatus() {
-        self.isAccessibilityGranted = RPCS3DirectInputAdapter.isAccessibilityPermissionGranted
+        let current = RPCS3DirectInputAdapter.isAccessibilityPermissionGranted
+        if current != self.isAccessibilityGranted {
+            self.isAccessibilityGranted = current
+            if current {
+                addLog("Accessibility authorization verified by system.")
+            }
+        }
+    }
+
+    public func requestAccessibilityPermission() {
+        let trusted = RPCS3DirectInputAdapter.requestAccessibilityPrompt()
+        self.isAccessibilityGranted = trusted
+        if !trusted {
+            addLog("Requested macOS Accessibility prompt. Opening System Settings...")
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        } else {
+            addLog("Accessibility permission is already active.")
+        }
     }
 
     public func openAccessibilitySettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
+        requestAccessibilityPermission()
     }
 
     public func killConflictingPort(port: UInt16) {
@@ -53,9 +95,9 @@ public final class AppViewModel: ObservableObject {
                 let pids = output.components(separatedBy: .newlines).compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
                 for pid in pids where pid != myPid {
                     addLog("Releasing port \(port) held by stale PID \(pid)...")
-                    kill(pid, SIGTERM)
+                    kill(pid, SIGKILL)
                 }
-                usleep(150_000) // 150ms pause to ensure socket teardown
+                usleep(100_000)
             }
         } catch {
             // Non-critical if lsof cannot be run
@@ -76,8 +118,8 @@ public final class AppViewModel: ObservableObject {
             guard let url = adbURL else {
                 await MainActor.run {
                     self.isUsbAdbConfigured = false
-                    self.usbStatusText = "ADB CLI Not Found"
-                    self.addLog("[USB] adb binary not located in standard paths.")
+                    self.usbStatusText = "ADB Not Found"
+                    self.addLog("[USB] adb CLI not located in standard paths.")
                 }
                 return
             }
@@ -102,14 +144,14 @@ public final class AppViewModel: ObservableObject {
                         self.addLog("[USB] Configured ADB reverse tcp:\(port) -> tcp:\(port) successfully.")
                     } else {
                         self.isUsbAdbConfigured = false
-                        self.usbStatusText = "No Phone Detected"
+                        self.usbStatusText = "No Phone"
                         self.addLog("[USB] ADB reverse note: \(output)")
                     }
                 }
             } catch {
                 await MainActor.run {
                     self.isUsbAdbConfigured = false
-                    self.usbStatusText = "Error (\(error.localizedDescription))"
+                    self.usbStatusText = "Error"
                     self.addLog("[USB] Error running ADB reverse: \(error.localizedDescription)")
                 }
             }
@@ -144,6 +186,10 @@ public final class AppViewModel: ObservableObject {
     }
 
     public func startServices() {
+        guard !isStarting else { return }
+        isStarting = true
+        serverStatusText = "Starting..."
+
         stopServices()
 
         let port = UInt16(portString) ?? 6000
@@ -151,6 +197,14 @@ public final class AppViewModel: ObservableObject {
         refreshAccessibilityStatus()
         configureUsbAdb()
 
+        // Allow kernel socket to finish teardown before binding new NWListener
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self else { return }
+            self.doStartServer(port: port)
+        }
+    }
+
+    private func doStartServer(port: UInt16) {
         addLog("Initializing RPCS3 Direct Input Gamepad backend...")
 
         let adapter = RPCS3DirectInputAdapter()
@@ -177,26 +231,42 @@ public final class AppViewModel: ObservableObject {
                 case .stopped:
                     self.serverStatusText = "Stopped"
                     self.isListening = false
+                    self.isStarting = false
                     self.isClientConnected = false
                     self.clientEndpoint = "None"
                     self.addLog("Server stopped.")
                 case .listening(let p):
                     self.serverStatusText = "Listening on port \(p)"
                     self.isListening = true
+                    self.isStarting = false
                     self.isClientConnected = false
                     self.clientEndpoint = "None"
+                    self.retryCount = 0
                     self.addLog("Server listening on port \(p)...")
                 case .clientConnected(let peer):
                     self.serverStatusText = "Client Connected"
                     self.isListening = true
+                    self.isStarting = false
                     self.isClientConnected = true
                     self.clientEndpoint = peer
                     self.addLog("Client connected from \(peer)")
                 case .failed(let err):
-                    self.serverStatusText = "Error: \(err)"
-                    self.isListening = false
-                    self.isClientConnected = false
                     self.addLog("Server error: \(err)")
+                    if err.contains("Address already in use") && self.retryCount < 2 {
+                        self.retryCount += 1
+                        self.serverStatusText = "Port releasing, retrying..."
+                        self.addLog("Port \(port) still releasing, retrying in 400ms (attempt \(self.retryCount))...")
+                        self.killConflictingPort(port: port)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            self.doStartServer(port: port)
+                        }
+                    } else {
+                        self.serverStatusText = "Error: \(err)"
+                        self.isListening = false
+                        self.isStarting = false
+                        self.isClientConnected = false
+                        self.retryCount = 0
+                    }
                 }
             }
         }
@@ -219,6 +289,7 @@ public final class AppViewModel: ObservableObject {
         } catch {
             self.serverStatusText = "Error: \(error.localizedDescription)"
             self.isListening = false
+            self.isStarting = false
             self.addLog("Failed to start server on port \(port): \(error)")
         }
     }
@@ -226,7 +297,12 @@ public final class AppViewModel: ObservableObject {
     public func restartServices() {
         addLog("Restarting services...")
         stopServices()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        isListening = false
+        isStarting = true
+        serverStatusText = "Restarting..."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self = self else { return }
+            self.isStarting = false
             self.startServices()
         }
     }
@@ -234,6 +310,11 @@ public final class AppViewModel: ObservableObject {
     public func stopServices() {
         server?.stop()
         server = nil
+        isListening = false
+        isStarting = false
+        isClientConnected = false
+        clientEndpoint = "None"
+        serverStatusText = "Stopped"
         Task {
             await backend?.disconnect()
             backend = nil

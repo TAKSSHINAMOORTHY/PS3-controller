@@ -48,15 +48,24 @@ public struct ContentView: View {
 
             HStack(spacing: 8) {
                 if !model.isAccessibilityGranted {
-                    Button(action: { model.openAccessibilitySettings() }) {
+                    Button(action: { model.requestAccessibilityPermission() }) {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.yellow)
                             Text("Grant Accessibility")
                                 .font(.caption)
+                                .fontWeight(.semibold)
                         }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                } else {
+                    statusPill(
+                        title: "Accessibility: OK",
+                        isActive: true,
+                        activeColor: .green,
+                        inactiveColor: .gray
+                    )
                 }
 
                 statusPill(
@@ -74,7 +83,7 @@ public struct ContentView: View {
                 )
 
                 statusPill(
-                    title: model.isClientConnected ? "Android Paired" : (model.isListening ? "Listening" : "Offline"),
+                    title: model.isClientConnected ? "Android Paired" : (model.isListening ? "Listening" : (model.isStarting ? "Starting..." : "Offline")),
                     isActive: model.isListening,
                     activeColor: model.isClientConnected ? .blue : .green,
                     inactiveColor: .red
@@ -175,7 +184,11 @@ public struct ContentView: View {
                         .foregroundColor(.secondary)
 
                     HStack(spacing: 8) {
-                        if model.isListening {
+                        if model.isStarting {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .frame(width: 80, height: 24)
+                        } else if model.isListening {
                             Button("Stop Server") {
                                 model.stopServices()
                             }

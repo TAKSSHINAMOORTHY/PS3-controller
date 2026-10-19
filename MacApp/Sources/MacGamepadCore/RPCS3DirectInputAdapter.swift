@@ -17,6 +17,13 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
         return AXIsProcessTrusted()
     }
 
+    @discardableResult
+    public static func requestAccessibilityPrompt() -> Bool {
+        let promptKey = "AXTrustedCheckOptionPrompt" as CFString
+        let options = [promptKey: true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
     public init() {
         self.eventSource = CGEventSource(stateID: .hidSystemState)
     }
