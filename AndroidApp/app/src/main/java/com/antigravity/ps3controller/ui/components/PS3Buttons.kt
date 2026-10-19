@@ -41,13 +41,17 @@ fun PressablePadButton(
     isRound: Boolean = true,
     size: Dp = 56.dp,
     fontSize: Int = 20,
+    scale: Float = 1.0f,
+    sensitivity: Float = 1.0f,
     onPressChanged: (Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
 
-    val shape = if (isRound) CircleShape else RoundedCornerShape(8.dp)
+    val effectiveSize = size * scale
+    val effectiveFontSize = (fontSize * scale).coerceAtLeast(10f).toInt()
+    val shape = if (isRound) CircleShape else RoundedCornerShape((8 * scale).dp)
     val bgColor = if (isPressed) {
-        accentColor.copy(alpha = 0.85f)
+        accentColor.copy(alpha = (0.85f * sensitivity.coerceIn(0.5f, 1.2f)).coerceIn(0.5f, 1.0f))
     } else {
         Color(0xFF23272E)
     }
@@ -55,11 +59,11 @@ fun PressablePadButton(
 
     Box(
         modifier = modifier
-            .size(size)
+            .size(effectiveSize)
             .shadow(if (isPressed) 2.dp else 4.dp, shape)
             .clip(shape)
             .background(bgColor)
-            .border(2.dp, if (isPressed) accentColor else Color(0xFF383E4A), shape)
+            .border((2 * scale).dp.coerceAtLeast(1.dp), if (isPressed) accentColor else Color(0xFF383E4A), shape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -83,7 +87,7 @@ fun PressablePadButton(
         Text(
             text = label,
             color = textColor,
-            fontSize = fontSize.sp,
+            fontSize = effectiveFontSize.sp,
             fontWeight = FontWeight.Bold
         )
     }
@@ -95,13 +99,15 @@ fun PressablePadButton(
 @Composable
 fun ActionButtonsPad(
     modifier: Modifier = Modifier,
+    scale: Float = 1.0f,
+    sensitivity: Float = 1.0f,
     onTriangle: (Boolean) -> Unit,
     onCircle: (Boolean) -> Unit,
     onCross: (Boolean) -> Unit,
     onSquare: (Boolean) -> Unit
 ) {
-    val btnSize = 56.dp
-    val spacing = 6.dp
+    val btnSize = (56 * scale).dp
+    val spacing = (6 * scale).dp
 
     Box(modifier = modifier.size(btnSize * 3 + spacing * 2), contentAlignment = Alignment.Center) {
         // Triangle (Top) - Green
@@ -109,7 +115,9 @@ fun ActionButtonsPad(
             PressablePadButton(
                 label = "△",
                 accentColor = Color(0xFF10B981),
-                size = btnSize,
+                size = 56.dp,
+                scale = scale,
+                sensitivity = sensitivity,
                 fontSize = 22,
                 onPressChanged = onTriangle
             )
@@ -120,7 +128,9 @@ fun ActionButtonsPad(
             PressablePadButton(
                 label = "□",
                 accentColor = Color(0xFFEC4899),
-                size = btnSize,
+                size = 56.dp,
+                scale = scale,
+                sensitivity = sensitivity,
                 fontSize = 22,
                 onPressChanged = onSquare
             )
@@ -131,7 +141,9 @@ fun ActionButtonsPad(
             PressablePadButton(
                 label = "○",
                 accentColor = Color(0xFFEF4444),
-                size = btnSize,
+                size = 56.dp,
+                scale = scale,
+                sensitivity = sensitivity,
                 fontSize = 22,
                 onPressChanged = onCircle
             )
@@ -142,7 +154,9 @@ fun ActionButtonsPad(
             PressablePadButton(
                 label = "✕",
                 accentColor = Color(0xFF3B82F6),
-                size = btnSize,
+                size = 56.dp,
+                scale = scale,
+                sensitivity = sensitivity,
                 fontSize = 20,
                 onPressChanged = onCross
             )
@@ -156,13 +170,15 @@ fun ActionButtonsPad(
 @Composable
 fun DPadPad(
     modifier: Modifier = Modifier,
+    scale: Float = 1.0f,
+    sensitivity: Float = 1.0f,
     onUp: (Boolean) -> Unit,
     onDown: (Boolean) -> Unit,
     onLeft: (Boolean) -> Unit,
     onRight: (Boolean) -> Unit
 ) {
-    val btnSize = 52.dp
-    val spacing = 4.dp
+    val btnSize = (52 * scale).dp
+    val spacing = (4 * scale).dp
     val dpadColor = Color(0xFF94A3B8)
 
     Box(modifier = modifier.size(btnSize * 3 + spacing * 2), contentAlignment = Alignment.Center) {
@@ -172,7 +188,9 @@ fun DPadPad(
                 label = "▲",
                 accentColor = dpadColor,
                 isRound = false,
-                size = btnSize,
+                size = 52.dp,
+                scale = scale,
+                sensitivity = sensitivity,
                 fontSize = 18,
                 onPressChanged = onUp
             )
@@ -184,7 +202,9 @@ fun DPadPad(
                 label = "◀",
                 accentColor = dpadColor,
                 isRound = false,
-                size = btnSize,
+                size = 52.dp,
+                scale = scale,
+                sensitivity = sensitivity,
                 fontSize = 18,
                 onPressChanged = onLeft
             )
@@ -203,7 +223,9 @@ fun DPadPad(
                 label = "▶",
                 accentColor = dpadColor,
                 isRound = false,
-                size = btnSize,
+                size = 52.dp,
+                scale = scale,
+                sensitivity = sensitivity,
                 fontSize = 18,
                 onPressChanged = onRight
             )
@@ -215,7 +237,9 @@ fun DPadPad(
                 label = "▼",
                 accentColor = dpadColor,
                 isRound = false,
-                size = btnSize,
+                size = 52.dp,
+                scale = scale,
+                sensitivity = sensitivity,
                 fontSize = 18,
                 onPressChanged = onDown
             )
@@ -232,18 +256,23 @@ fun ShoulderButton(
     label: String,
     width: Dp = 80.dp,
     height: Dp = 38.dp,
+    scale: Float = 1.0f,
+    sensitivity: Float = 1.0f,
     onPressChanged: (Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(6.dp)
+    val shape = RoundedCornerShape((6 * scale).dp)
+    val effectiveWidth = width * scale
+    val effectiveHeight = height * scale
+    val activeColor = Color(0xFF3B82F6)
 
     Box(
         modifier = modifier
-            .width(width)
-            .height(height)
+            .width(effectiveWidth)
+            .height(effectiveHeight)
             .clip(shape)
-            .background(if (isPressed) Color(0xFF3B82F6) else Color(0xFF282D36))
-            .border(1.5.dp, Color(0xFF475060), shape)
+            .background(if (isPressed) activeColor.copy(alpha = (0.9f * sensitivity.coerceIn(0.5f, 1.2f)).coerceIn(0.5f, 1.0f)) else Color(0xFF282D36))
+            .border((1.5 * scale).dp.coerceAtLeast(1.dp), Color(0xFF475060), shape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -267,29 +296,32 @@ fun ShoulderButton(
         Text(
             text = label,
             color = if (isPressed) Color.White else Color(0xFFCBD5E1),
-            fontSize = 13.sp,
+            fontSize = ((13 * scale).coerceAtLeast(9f)).sp,
             fontWeight = FontWeight.Bold
         )
     }
 }
 
 /**
- * System Pills (Select, Start, PS)
+ * System Pills (Select, Start, PS, L3, R3)
  */
 @Composable
 fun SystemPillButton(
     modifier: Modifier = Modifier,
     label: String,
     isSpecial: Boolean = false,
+    scale: Float = 1.0f,
+    sensitivity: Float = 1.0f,
     onPressChanged: (Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
-    val shape = if (isSpecial) CircleShape else RoundedCornerShape(12.dp)
-    val size = if (isSpecial) 44.dp else 32.dp
+    val shape = if (isSpecial) CircleShape else RoundedCornerShape((12 * scale).dp)
+    val effectiveWidth = (if (isSpecial) 44.dp else 56.dp) * scale
+    val effectiveHeight = (if (isSpecial) 44.dp else 32.dp) * scale
 
     Box(
         modifier = modifier
-            .size(width = if (isSpecial) 44.dp else 56.dp, height = size)
+            .size(width = effectiveWidth, height = effectiveHeight)
             .clip(shape)
             .background(
                 if (isPressed) {
@@ -298,7 +330,7 @@ fun SystemPillButton(
                     Color(0xFF1E2229)
                 }
             )
-            .border(1.dp, Color(0xFF3F4654), shape)
+            .border((1 * scale).dp.coerceAtLeast(1.dp), Color(0xFF3F4654), shape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -322,7 +354,7 @@ fun SystemPillButton(
         Text(
             text = label,
             color = if (isPressed) Color.White else (if (isSpecial) Color(0xFFF59E0B) else Color(0xFF94A3B8)),
-            fontSize = if (isSpecial) 14.sp else 10.sp,
+            fontSize = (if (isSpecial) 14 * scale else 10 * scale).coerceAtLeast(8f).sp,
             fontWeight = FontWeight.Bold
         )
     }

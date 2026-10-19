@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val prefs = getSharedPreferences("ps3_controller_prefs", Context.MODE_PRIVATE)
 
@@ -46,8 +47,13 @@ class MainActivity : ComponentActivity() {
             }
             var deadZone by remember { mutableFloatStateOf(prefs.getFloat("deadzone", 0.05f)) }
             var sensitivity by remember { mutableFloatStateOf(prefs.getFloat("sensitivity", 1.0f)) }
+            var buttonSensitivity by remember { mutableFloatStateOf(prefs.getFloat("button_sensitivity", 1.0f)) }
             var haptics by remember { mutableStateOf(prefs.getBoolean("haptics", true)) }
 
+            var layoutConfig by remember {
+                mutableStateOf(com.antigravity.ps3controller.model.ControllerLayoutConfig.loadFromPrefs(prefs))
+            }
+            var isEditMode by remember { mutableStateOf(false) }
             var isSettingsOpen by remember { mutableStateOf(false) }
 
             val activeClient = remember(host, port) {
@@ -68,7 +74,15 @@ class MainActivity : ComponentActivity() {
                 port = port,
                 deadZone = deadZone,
                 sensitivity = sensitivity,
+                buttonSensitivity = buttonSensitivity,
                 hapticsEnabled = haptics,
+                layoutConfig = layoutConfig,
+                isEditMode = isEditMode,
+                onEditModeChanged = { isEditMode = it },
+                onUpdateLayoutConfig = { newConfig ->
+                    layoutConfig = newConfig
+                    com.antigravity.ps3controller.model.ControllerLayoutConfig.saveToPrefs(prefs, newConfig)
+                },
                 onOpenSettings = { isSettingsOpen = true }
             )
 
@@ -78,13 +92,18 @@ class MainActivity : ComponentActivity() {
                     initialPort = port,
                     initialDeadZone = deadZone,
                     initialSensitivity = sensitivity,
+                    initialButtonSensitivity = buttonSensitivity,
                     initialHaptics = haptics,
                     onDismiss = { isSettingsOpen = false },
-                    onSave = { newHost, newPort, newDeadZone, newSensitivity, newHaptics ->
+                    onEnterEditMode = {
+                        isEditMode = true
+                    },
+                    onSave = { newHost, newPort, newDeadZone, newSensitivity, newButtonSensitivity, newHaptics ->
                         host = newHost
                         port = newPort
                         deadZone = newDeadZone
                         sensitivity = newSensitivity
+                        buttonSensitivity = newButtonSensitivity
                         haptics = newHaptics
 
                         prefs.edit()
@@ -92,6 +111,7 @@ class MainActivity : ComponentActivity() {
                             .putInt("port", newPort)
                             .putFloat("deadzone", newDeadZone)
                             .putFloat("sensitivity", newSensitivity)
+                            .putFloat("button_sensitivity", newButtonSensitivity)
                             .putBoolean("haptics", newHaptics)
                             .apply()
 

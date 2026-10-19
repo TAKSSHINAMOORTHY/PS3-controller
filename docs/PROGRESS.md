@@ -57,11 +57,23 @@
     - Resolved Android 16 edge-to-edge Insets lifecycle crash and enabled cleartext WebSocket permissions.
     - Established zero-latency USB reverse forwarding (`adb reverse tcp:6000 tcp:6000`) and verified auto-pairing on launch.
     - Verified live connection status pill (`CONNECTED: 127.0.0.1:6000`) and console HUD.
+  * Interactive Layout Customization & Button Sensitivity:
+    - Implemented `LayoutConfig.kt` defining per-cluster offset $(x, y)$, scale factor ($0.6\times$ to $1.8\times$), and sensitivity multiplier ($0.5\times$ to $2.5\times$), fully serialized to JSON in `SharedPreferences`.
+    - Added interactive "Edit Buttons" mode with visual selection frames, freehand touch dragging, and discrete 6px directional nudge controls (←, ↑, ↓, →).
+    - Created docked `EditInspectorToolbar` with discrete $[-]$ and $[+]$ stepper buttons and continuous sliders for immediate element scaling and sensitivity tuning.
+    - Designed custom landscape `SettingsDialog` (`DialogProperties(usePlatformDefaultWidth = false)`) with side-by-side Button Sensitivity (0.5x–2.5x), Stick Sensitivity (0.5x–2.0x), Dead Zone (1%–25%), Haptics toggle, and one-tap "✏️ Edit Layout" launcher.
+    - Updated `TouchInputMapper.kt` and `PS3Buttons.kt` to dynamically scale hitboxes and apply sensitivity multipliers to analog trigger and pressure calculations.
+    - Validated all 11 unit tests (`./gradlew testDebugUnitTest`) and deployed to physical hardware.
 - Files changed:
-  * `AndroidApp/app/src/main/AndroidManifest.xml`
   * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/MainActivity.kt`
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/network/GamepadClient.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/math/TouchInputMapper.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/model/LayoutConfig.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/ControllerScreen.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/SettingsDialog.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/components/PS3Buttons.kt`
+  * `AndroidApp/app/src/test/java/com/antigravity/ps3controller/TouchInputMapperTest.kt`
   * `docs/DECISION_LOG.md`
   * `docs/PROGRESS.md`
-- Tests passed: ALL (0 failures).
-- Blockers: None. Live devices connected and operational.
+- Tests passed: ALL (11/11 unit tests passed, 0 failures).
+- Blockers: None. Live devices connected, paired, and verified.
+

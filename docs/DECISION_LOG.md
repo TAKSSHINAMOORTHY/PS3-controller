@@ -50,3 +50,15 @@
 - Status: Accepted
 - Decision: Configure `adb reverse tcp:6000 tcp:6000` for physical USB connections while retaining automatic broadcast/Wi-Fi connection capabilities on `192.168.1.0/24`. Default host fallback set to `127.0.0.1` when tethered, auto-connecting immediately on app launch.
 - Reason: USB reverse proxy eliminates Wi-Fi packet jitter and interference, delivering sub-millisecond input responsiveness while allowing seamless fallback to local Wi-Fi.
+
+## D-009 — Interactive Touch Overlay Customization (Move, Resize, Nudge)
+- Status: Accepted
+- Decision: Implement an interactive Edit Mode in Compose allowing users to select touch clusters (D-Pad, Left Stick, Right Stick, Action Buttons, Left/Right Shoulders, Center Controls), drag them freely across the screen, nudge them in discrete 6px increments (←, ↑, ↓, →), and scale them between 60% and 180%. Persist the full layout configuration as JSON in `SharedPreferences`.
+- Reason: Mobile screen dimensions and finger ergonomics vary widely across phone models and grip styles. Users need flexible customization to avoid mispresses during gameplay.
+- Consequence: Added `LayoutConfig.kt` with per-cluster offsets, scales, and sensitivities, plus an `EditInspectorToolbar` with discrete nudge and scale buttons.
+
+## D-010 — Per-Element and Global Button/Trigger Sensitivity Curve
+- Status: Accepted
+- Decision: Provide both a global button/trigger sensitivity slider in the Settings Dialog (0.5x to 2.5x) and a per-cluster sensitivity multiplier in the Edit Mode Inspector. The effective sensitivity scales the pressure thresholds for buttons and applies a responsive curve `clamp(value * sensitivity, 0.0, 1.0)` to analog triggers (L2/R2) in `TouchInputMapper`.
+- Reason: Enables players to tune hair-trigger responsiveness for fast-paced action or set lower sensitivity for high-precision throttle control in racing titles.
+

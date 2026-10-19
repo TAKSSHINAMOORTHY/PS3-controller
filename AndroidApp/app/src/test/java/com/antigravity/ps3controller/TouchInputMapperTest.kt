@@ -1,6 +1,8 @@
 package com.antigravity.ps3controller
 
 import com.antigravity.ps3controller.math.TouchInputMapper
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -80,5 +82,29 @@ class TouchInputMapperTest {
         assertEquals(0.0f, TouchInputMapper.mapTrigger(-0.5f), 0.001f)
         assertEquals(0.75f, TouchInputMapper.mapTrigger(0.75f), 0.001f)
         assertEquals(1.0f, TouchInputMapper.mapTrigger(1.5f), 0.001f)
+    }
+
+    @Test
+    fun testTriggerSensitivity() {
+        // Half sensitivity scales down
+        assertEquals(0.375f, TouchInputMapper.mapTrigger(0.75f, sensitivity = 0.5f), 0.001f)
+        // High sensitivity reaches clamp 1.0f faster
+        assertEquals(1.0f, TouchInputMapper.mapTrigger(0.75f, sensitivity = 1.5f), 0.001f)
+        assertEquals(0.5f, TouchInputMapper.mapTrigger(0.25f, sensitivity = 2.0f), 0.001f)
+    }
+
+    @Test
+    fun testLayoutConfigSerialization() {
+        val config = com.antigravity.ps3controller.model.ControllerLayoutConfig(
+            actionButtons = com.antigravity.ps3controller.model.ElementLayout(offsetX = 12f, offsetY = -5f, scale = 1.2f, sensitivity = 1.5f),
+            globalButtonSensitivity = 1.4f
+        )
+        val json = kotlinx.serialization.json.Json.encodeToString(config)
+        val decoded = kotlinx.serialization.json.Json.decodeFromString<com.antigravity.ps3controller.model.ControllerLayoutConfig>(json)
+        assertEquals(12f, decoded.actionButtons.offsetX, 0.001f)
+        assertEquals(-5f, decoded.actionButtons.offsetY, 0.001f)
+        assertEquals(1.2f, decoded.actionButtons.scale, 0.001f)
+        assertEquals(1.5f, decoded.actionButtons.sensitivity, 0.001f)
+        assertEquals(1.4f, decoded.globalButtonSensitivity, 0.001f)
     }
 }

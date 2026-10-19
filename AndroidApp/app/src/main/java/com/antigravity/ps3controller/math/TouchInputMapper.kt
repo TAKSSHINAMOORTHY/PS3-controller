@@ -54,9 +54,10 @@ object TouchInputMapper {
     }
 
     /**
-     * Clamps a trigger value to [0.0, 1.0].
+     * Clamps a trigger value to [0.0, 1.0] scaled by sensitivity.
      */
-    fun mapTrigger(value: Float): Float {
-        return value.coerceIn(0f, 1f)
+    fun mapTrigger(value: Float, sensitivity: Float = 1.0f): Float {
+        val effectiveSensitivity = if (sensitivity <= 0f) 1.0f else sensitivity
+        return (value * effectiveSensitivity).coerceIn(0f, 1f)
     }
 }
