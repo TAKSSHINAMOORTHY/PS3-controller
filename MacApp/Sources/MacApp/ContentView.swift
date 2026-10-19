@@ -47,11 +47,30 @@ public struct ContentView: View {
             Spacer()
 
             HStack(spacing: 8) {
+                if !model.isAccessibilityGranted {
+                    Button(action: { model.openAccessibilitySettings() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.yellow)
+                            Text("Grant Accessibility")
+                                .font(.caption)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
                 statusPill(
-                    title: "DriverKit",
+                    title: "RPCS3 Bridge",
                     isActive: model.isBackendConnected,
                     activeColor: .green,
                     inactiveColor: .orange
+                )
+
+                statusPill(
+                    title: "USB: \(model.usbStatusText)",
+                    isActive: model.isUsbAdbConfigured,
+                    activeColor: .green,
+                    inactiveColor: .secondary
                 )
 
                 statusPill(
@@ -83,23 +102,65 @@ public struct ContentView: View {
 
     // MARK: - Connection Card
     private var connectionCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Network & Pairing")
-                .font(.subheadline)
-                .fontWeight(.bold)
-                .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Network & Pairing")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(model.isListening ? Color.green : (model.serverStatusText.contains("Error") ? Color.red : Color.gray))
+                        .frame(width: 8, height: 8)
+                    Text("Server: \(model.serverStatusText)")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(model.isListening ? .green : (model.serverStatusText.contains("Error") ? .red : .secondary))
+                }
+            }
 
             HStack(alignment: .top, spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Connect Android Client to:")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Connection Endpoints:")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
+                    // USB Endpoint
+                    HStack {
+                        Image(systemName: "cable.connector")
+                            .foregroundColor(.green)
+                            .frame(width: 16)
+                        Text("ws://127.0.0.1:\(model.portString) (USB)")
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(model.isUsbAdbConfigured ? Color.green : Color.orange)
+                                .frame(width: 6, height: 6)
+                            Text(model.usbStatusText)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Setup USB") {
+                            model.configureUsbAdb()
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                    }
+
+                    // Wi-Fi Endpoints
                     ForEach(model.localIPs, id: \.self) { ip in
                         HStack {
                             Image(systemName: "wifi")
                                 .foregroundColor(.blue)
-                            Text("ws://\(ip):\(model.portString)")
+                                .frame(width: 16)
+                            Text("ws://\(ip):\(model.portString) (Wi-Fi)")
                                 .font(.system(.body, design: .monospaced))
                                 .textSelection(.enabled)
                         }
@@ -108,21 +169,31 @@ public struct ContentView: View {
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text("Client Status: \(model.clientEndpoint)")
+                VStack(alignment: .trailing, spacing: 8) {
+                    Text("Client: \(model.clientEndpoint)")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
-                    HStack {
+                    HStack(spacing: 8) {
                         if model.isListening {
                             Button("Stop Server") {
                                 model.stopServices()
+                            }
+                            Button("Restart") {
+                                model.restartServices()
                             }
                         } else {
                             Button("Start Server") {
                                 model.startServices()
                             }
                             .buttonStyle(.borderedProminent)
+
+                            if model.serverStatusText.contains("Error") {
+                                Button("Free Port & Retry") {
+                                    model.restartServices()
+                                }
+                                .buttonStyle(.bordered)
+                            }
                         }
                     }
                 }

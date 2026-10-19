@@ -93,10 +93,10 @@ class GamepadClient(
             TransportPreference.FORCE_USB -> Pair(usbHost, "USB")
             TransportPreference.FORCE_WIFI -> Pair(wifiHost, "Wi-Fi")
             TransportPreference.AUTO_PREFER_USB -> {
-                // Probe USB (127.0.0.1:serverPort) first with quick 300ms socket probe
+                // Probe USB (127.0.0.1:serverPort) first with reliable 500ms socket probe
                 val isUsbAvailable = try {
                     java.net.Socket().use { s ->
-                        s.connect(java.net.InetSocketAddress(usbHost, serverPort), 300)
+                        s.connect(java.net.InetSocketAddress(usbHost, serverPort), 500)
                         true
                     }
                 } catch (_: Exception) {

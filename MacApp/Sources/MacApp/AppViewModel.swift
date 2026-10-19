@@ -16,12 +16,104 @@ public final class AppViewModel: ObservableObject {
     @Published public var currentState: ControllerState = ControllerState.neutral()
     @Published public var logs: [String] = []
     @Published public var portString: String = "6000"
+    @Published public var isAccessibilityGranted: Bool = true
+    @Published public var usbStatusText: String = "Checking..."
+    @Published public var isUsbAdbConfigured: Bool = false
 
     private var server: ControllerServer?
     private var backend: GamepadBackend?
 
     public init() {
         refreshNetworkInterfaces()
+        refreshAccessibilityStatus()
+    }
+
+    public func refreshAccessibilityStatus() {
+        self.isAccessibilityGranted = RPCS3DirectInputAdapter.isAccessibilityPermissionGranted
+    }
+
+    public func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    public func killConflictingPort(port: UInt16) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = ["-ti", ":\(port)"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty {
+                let myPid = ProcessInfo.processInfo.processIdentifier
+                let pids = output.components(separatedBy: .newlines).compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+                for pid in pids where pid != myPid {
+                    addLog("Releasing port \(port) held by stale PID \(pid)...")
+                    kill(pid, SIGTERM)
+                }
+                usleep(150_000) // 150ms pause to ensure socket teardown
+            }
+        } catch {
+            // Non-critical if lsof cannot be run
+        }
+    }
+
+    public func configureUsbAdb() {
+        let port = UInt16(portString) ?? 6000
+        Task.detached {
+            let possibleAdbPaths = [
+                "/Users/\(NSUserName())/Library/Android/sdk/platform-tools/adb",
+                "\(NSHomeDirectory())/Library/Android/sdk/platform-tools/adb",
+                "/opt/homebrew/bin/adb",
+                "/usr/local/bin/adb"
+            ]
+            let adbURL = possibleAdbPaths.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+
+            guard let url = adbURL else {
+                await MainActor.run {
+                    self.isUsbAdbConfigured = false
+                    self.usbStatusText = "ADB CLI Not Found"
+                    self.addLog("[USB] adb binary not located in standard paths.")
+                }
+                return
+            }
+
+            let process = Process()
+            process.executableURL = url
+            process.arguments = ["reverse", "tcp:\(port)", "tcp:\(port)"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                await MainActor.run {
+                    if process.terminationStatus == 0 {
+                        self.isUsbAdbConfigured = true
+                        self.usbStatusText = "Active (Port \(port))"
+                        self.addLog("[USB] Configured ADB reverse tcp:\(port) -> tcp:\(port) successfully.")
+                    } else {
+                        self.isUsbAdbConfigured = false
+                        self.usbStatusText = "No Phone Detected"
+                        self.addLog("[USB] ADB reverse note: \(output)")
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.isUsbAdbConfigured = false
+                    self.usbStatusText = "Error (\(error.localizedDescription))"
+                    self.addLog("[USB] Error running ADB reverse: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     public func refreshNetworkInterfaces() {
@@ -52,7 +144,13 @@ public final class AppViewModel: ObservableObject {
     }
 
     public func startServices() {
+        stopServices()
+
         let port = UInt16(portString) ?? 6000
+        killConflictingPort(port: port)
+        refreshAccessibilityStatus()
+        configureUsbAdb()
+
         addLog("Initializing RPCS3 Direct Input Gamepad backend...")
 
         let adapter = RPCS3DirectInputAdapter()
@@ -119,7 +217,17 @@ public final class AppViewModel: ObservableObject {
             try srv.start()
             self.server = srv
         } catch {
+            self.serverStatusText = "Error: \(error.localizedDescription)"
+            self.isListening = false
             self.addLog("Failed to start server on port \(port): \(error)")
+        }
+    }
+
+    public func restartServices() {
+        addLog("Restarting services...")
+        stopServices()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.startServices()
         }
     }
 

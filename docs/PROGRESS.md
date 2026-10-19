@@ -15,7 +15,8 @@
 - [x] Phase 5 — End-to-end integration
 - [x] Phase 6 — Quality and resilience
 - [x] Phase 7 — GitHub readiness
-- [ ] Phase 8 — Optional USB transport (Post-launch enhancement)
+- [x] Phase 8 — USB transport and automated ADB reverse port-forwarding
+- [x] Phase 9 — Independent /Applications installation & robust server restart
 
 ## Empirical Verification Summary
 
@@ -69,22 +70,18 @@
     - Issue 2 (Right Analog Stick Pipeline): Verified end-to-end transmission of `rx` and `ry` through protocol validator. Mapped macOS companion directly to RPCS3's native `Default.yml` Player 1 keyboard bindings (Up: Home 115, Down: End 119, Left: Forward Delete 117, Right: Page Down 121) alongside IKJL aliases, and mapped L3 to F (3) and PS to Backspace (51).
     - Issue 3 (Menu/Cutscene Recovery & macOS Input): Replaced arbitrary synthetic mouse clicks with native macOS `CGEventSource(stateID: .hidSystemState)` and `AXIsProcessTrusted()` accessibility check. Removed duplicate event posting. Upgraded `ControllerServer` to extract all multi-frame packets in stream buffers, increased idle heartbeat timeout to 8.0s, and guaranteed all held keys are released on neutral transition, disconnect, or timeout.
     - Issue 4 (Independent Control Movement & Resizing): Expanded `LayoutConfig.kt` to define stable, unique `ControlId`s for all 19 individual controls (Cross, Circle, Square, Triangle, D-pad Up/Down/Left/Right, L1, R1, L2, R2, L3, R3, Start, Select, PS, Left Stick, Right Stick). Each control stores independent $(x, y)$ offsets, scale factor, sensitivity, and opacity. Migrated legacy cluster configs automatically. Updated `ControllerScreen.kt` with individual `EditableControl` wrappers and an interactive `EditInspectorToolbar` allowing independent repositioning, resizing (0.5x–2.0x), sensitivity tuning, nudge, and reset.
+    - Issue 5 (Server Start & USB ADB Integration): Diagnosed why "Start Server" appeared stuck (port 6000 was held by an orphaned background process). Added automated stale port collision detection (`killConflictingPort`) and clean server teardown/restart (`restartServices`). Added automated ADB reverse USB port forwarding (`configureUsbAdb`) in `AppViewModel` so USB mode works automatically without manual terminal commands. Added live USB status indicators and "Setup USB" button in `ContentView.swift`. Recompiled release binary, generated standalone application bundle, and installed independent copy directly into `/Applications/PS3ControllerCompanion.app`. Verified live USB connection and pair acceptance with physical Android device `10BD12000X00011`.
 - Files changed:
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/math/TouchInputMapper.kt`
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/components/JoystickStick.kt`
   * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/network/GamepadClient.kt`
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/model/LayoutConfig.kt`
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/ControllerScreen.kt`
-  * `AndroidApp/app/src/test/java/com/antigravity/ps3controller/IndependentControlsLayoutTest.kt`
-  * `MacApp/Sources/MacGamepadCore/RPCS3DirectInputAdapter.swift`
-  * `MacApp/Sources/MacGamepadCore/ControllerServer.swift`
-  * `MacApp/Tests/MacGamepadCoreTests/ProtocolTests.swift`
-  * `docs/DECISION_LOG.md`
+  * `MacApp/Sources/MacApp/AppViewModel.swift`
+  * `MacApp/Sources/MacApp/ContentView.swift`
   * `docs/PROGRESS.md`
 - Tests passed: ALL
-  * Android unit tests: 17/17 passed (`./gradlew testDebugUnitTest`)
+  * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
   * macOS Core tests: 11/11 passed (`swift test`)
-  * Android APK build: SUCCESS (`./gradlew assembleDebug`)
-  * macOS companion release build: SUCCESS (`swift build -c release`)
-- Blockers: None. Implementation complete and ready for final manual testing.
+  * Android APK build: SUCCESS (`./scripts/build-android.sh`)
+  * macOS companion release build: SUCCESS (`./scripts/build-macos.sh`)
+  * /Applications independent installation: SUCCESS (`/Applications/PS3ControllerCompanion.app`)
+  * Live USB ADB Reverse pairing: VERIFIED (`status: accepted`, ESTABLISHED socket)
+- Blockers: None. Server is actively listening and phone is paired over USB.
 
