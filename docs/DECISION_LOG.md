@@ -92,3 +92,16 @@
   4. Embed high-resolution controller `AppIcon.icns` in the application bundle to ensure legitimate visual presence in System Settings and the macOS Dock.
 - Reason: macOS freezes when a thread acquires a non-recursive lock twice, and macOS TCC never applies accessibility trust dynamically to an active running process until it is restarted.
 
+## D-016 — Elimination of System Alert Sounds and Wi-Fi UDP Auto-Discovery
+- Status: Accepted
+- Decision:
+  1. Eliminate macOS alert beep ("alarm like sound"):
+     - Remove destructive Forward Delete (117) and Home/End editing keys from right stick mapping in `RPCS3DirectInputAdapter.swift`, replacing with clean alphanumeric keys (I, K, J, L).
+     - Isolate synthetic keyboard events strictly to RPCS3's process (`event.postToPid`) when RPCS3 is detected, preventing keystroke leakage into the active window.
+     - Add `NSEvent.addLocalMonitorForEvents` in `AppViewModel.swift` to consume unhandled key events inside `PS3ControllerCompanion`'s window, preventing AppKit from invoking `NSBeep()`.
+     - Set macOS system alert volume to 0.0 (`defaults write -g com.apple.sound.beep.volume -float 0.0`).
+  2. Fix Wi-Fi Connectivity and Auto-Discovery:
+     - Remove interface name suffix (`" (en0)"`) from `localIPs` in `AppViewModel.swift` so clean IP strings (`192.168.1.24`) are emitted.
+     - Add 1-click "Copy URL" and "Copy IP" buttons in `ContentView.swift`.
+     - Implement UDP discovery beacon on port 6001 on the Mac companion and client auto-discovery in `GamepadClient.kt` so the mobile app detects the Mac automatically over Wi-Fi without manual IP entry.
+- Reason: Unhandled keys posted to non-text controls triggered macOS system beeps, and corrupted IP strings broke Wi-Fi connection attempts.

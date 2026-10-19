@@ -35,7 +35,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             var wifiHost by remember {
                 val intentHost = intent?.getStringExtra("wifi_host") ?: intent?.getStringExtra("host")
-                val defaultHost = intentHost ?: prefs.getString("wifi_host", "192.168.1.20") ?: "192.168.1.20"
+                val defaultHost = intentHost ?: prefs.getString("wifi_host", "192.168.1.24") ?: "192.168.1.24"
                 mutableStateOf(defaultHost)
             }
             var usbHost by remember {

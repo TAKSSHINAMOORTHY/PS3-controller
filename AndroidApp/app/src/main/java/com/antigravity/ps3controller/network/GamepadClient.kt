@@ -41,7 +41,7 @@ enum class TransportPreference {
 
 class GamepadClient(
     val usbHost: String = "127.0.0.1",
-    val wifiHost: String = "192.168.1.20",
+    val wifiHost: String = "192.168.1.24",
     val serverPort: Int = 6000,
     val transportPreference: TransportPreference = TransportPreference.AUTO_PREFER_USB,
     private val clientName: String = "Android PS3 Gamepad"
@@ -49,7 +49,7 @@ class GamepadClient(
     // Backwards-compatible constructor for single host
     constructor(serverHost: String, serverPort: Int, clientName: String = "Android PS3 Gamepad") : this(
         usbHost = if (serverHost == "127.0.0.1") "127.0.0.1" else serverHost,
-        wifiHost = if (serverHost != "127.0.0.1") serverHost else "192.168.1.20",
+        wifiHost = if (serverHost != "127.0.0.1") serverHost else "192.168.1.24",
         serverPort = serverPort,
         transportPreference = if (serverHost == "127.0.0.1") TransportPreference.AUTO_PREFER_USB else TransportPreference.FORCE_WIFI,
         clientName = clientName
@@ -91,12 +91,12 @@ class GamepadClient(
     private suspend fun resolveTargetHost(): Pair<String, String> = withContext(Dispatchers.IO) {
         when (transportPreference) {
             TransportPreference.FORCE_USB -> Pair(usbHost, "USB")
-            TransportPreference.FORCE_WIFI -> Pair(wifiHost, "Wi-Fi")
+            TransportPreference.FORCE_WIFI -> Pair(resolveWifiHost(), "Wi-Fi")
             TransportPreference.AUTO_PREFER_USB -> {
-                // Probe USB (127.0.0.1:serverPort) first with reliable 500ms socket probe
+                // Probe USB (127.0.0.1:serverPort) first with reliable 400ms socket probe
                 val isUsbAvailable = try {
                     java.net.Socket().use { s ->
-                        s.connect(java.net.InetSocketAddress(usbHost, serverPort), 500)
+                        s.connect(java.net.InetSocketAddress(usbHost, serverPort), 400)
                         true
                     }
                 } catch (_: Exception) {
@@ -106,9 +106,63 @@ class GamepadClient(
                 if (isUsbAvailable) {
                     Pair(usbHost, "USB")
                 } else {
-                    Pair(wifiHost, "Wi-Fi")
+                    Pair(resolveWifiHost(), "Wi-Fi")
                 }
             }
+        }
+    }
+
+    private fun resolveWifiHost(): String {
+        // 1. Probe currently configured wifiHost (e.g. 192.168.1.24)
+        if (isHostReachable(wifiHost, serverPort, 500)) {
+            return wifiHost
+        }
+
+        // 2. Auto-discover Mac companion via UDP broadcast on port 6001
+        val discovered = discoverHostViaUDP(6001, 700)
+        if (discovered != null) {
+            Log.i("GamepadClient", "Auto-discovered Mac bridge via UDP: $discovered")
+            return discovered
+        }
+
+        // 3. Fallback to configured host
+        return wifiHost
+    }
+
+    private fun isHostReachable(host: String, port: Int, timeoutMs: Int): Boolean {
+        return try {
+            java.net.Socket().use { s ->
+                s.connect(java.net.InetSocketAddress(host, port), timeoutMs)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun discoverHostViaUDP(discoveryPort: Int, timeoutMs: Int): String? {
+        return try {
+            java.net.DatagramSocket().use { socket ->
+                socket.broadcast = true
+                socket.soTimeout = timeoutMs
+                val msg = "DISCOVER_PS3_BRIDGE".toByteArray()
+                val packet = java.net.DatagramPacket(
+                    msg, msg.size,
+                    java.net.InetAddress.getByName("255.255.255.255"),
+                    discoveryPort
+                )
+                socket.send(packet)
+
+                val buf = ByteArray(1024)
+                val respPacket = java.net.DatagramPacket(buf, buf.size)
+                socket.receive(respPacket)
+                val str = String(respPacket.data, 0, respPacket.length)
+                val regex = "\"ip\"\\s*:\\s*\"([^\"]+)\"".toRegex()
+                val match = regex.find(str)
+                match?.groupValues?.get(1) ?: respPacket.address.hostAddress
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 

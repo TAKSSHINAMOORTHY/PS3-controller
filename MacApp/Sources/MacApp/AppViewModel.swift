@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import Network
 import MacGamepadCore
 import Darwin
 
@@ -25,11 +26,20 @@ public final class AppViewModel: ObservableObject {
     private var backend: GamepadBackend?
     private var retryCount: Int = 0
     private var accessibilityCancellable: AnyCancellable?
+    private var discoveryListener: NWListener?
 
     public init() {
         refreshNetworkInterfaces()
         refreshAccessibilityStatus()
         setupAccessibilityMonitor()
+        silenceLocalKeyBeeps()
+    }
+
+    private func silenceLocalKeyBeeps() {
+        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { _ in
+            // Silently consume local keystrokes to prevent macOS unhandled key alert sounds (alarm sounds)
+            return nil
+        }
     }
 
     public func setupAccessibilityMonitor() {
@@ -199,13 +209,45 @@ public final class AppViewModel: ObservableObject {
                                nil, socklen_t(0), NI_NUMERICHOST) == 0 {
                     let ip = String(cString: &hostname)
                     if ip != "127.0.0.1" && (name.hasPrefix("en") || name.hasPrefix("wi")) {
-                        addresses.append("\(ip) (\(name))")
+                        if !addresses.contains(ip) {
+                            addresses.append(ip)
+                        }
                     }
                 }
             }
             ptr = interface.ifa_next
         }
-        self.localIPs = addresses.isEmpty ? ["127.0.0.1 (localhost)"] : addresses
+        self.localIPs = addresses.isEmpty ? ["127.0.0.1"] : addresses
+    }
+
+    public func startDiscoveryBeacon(port: UInt16) {
+        stopDiscoveryBeacon()
+        let myIP = self.localIPs.first ?? "127.0.0.1"
+        do {
+            let params = NWParameters.udp
+            params.allowLocalEndpointReuse = true
+            let listener = try NWListener(using: params, on: 6001)
+            listener.newConnectionHandler = { connection in
+                connection.start(queue: .main)
+                connection.receiveMessage { content, _, _, _ in
+                    guard let data = content, let str = String(data: data, encoding: .utf8) else { return }
+                    if str.contains("DISCOVER_PS3") {
+                        let reply = "{\"service\":\"ps3_bridge\",\"ip\":\"\(myIP)\",\"port\":\(port)}"
+                        connection.send(content: Data(reply.utf8), completion: .contentProcessed({ _ in }))
+                    }
+                }
+            }
+            listener.start(queue: .main)
+            self.discoveryListener = listener
+            addLog("[Discovery] Auto-discovery beacon active on UDP 6001.")
+        } catch {
+            // Non-critical if port 6001 is already bound
+        }
+    }
+
+    public func stopDiscoveryBeacon() {
+        discoveryListener?.cancel()
+        discoveryListener = nil
     }
 
     public func startServices() {
@@ -224,6 +266,7 @@ public final class AppViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self else { return }
             self.doStartServer(port: port)
+            self.startDiscoveryBeacon(port: port)
         }
     }
 
@@ -331,6 +374,7 @@ public final class AppViewModel: ObservableObject {
     }
 
     public func stopServices() {
+        stopDiscoveryBeacon()
         server?.stop()
         server = nil
         isListening = false

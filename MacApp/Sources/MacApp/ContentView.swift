@@ -212,6 +212,26 @@ public struct ContentView: View {
                             Text("ws://\(ip):\(model.portString) (Wi-Fi)")
                                 .font(.system(.body, design: .monospaced))
                                 .textSelection(.enabled)
+
+                            Button("Copy URL") {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.setString("ws://\(ip):\(model.portString)", forType: .string)
+                                model.addLog("Copied ws://\(ip):\(model.portString) to clipboard")
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption2)
+                            .foregroundColor(.blue)
+
+                            Button("Copy IP") {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.setString(ip, forType: .string)
+                                model.addLog("Copied IP \(ip) to clipboard")
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
                         }
                     }
                 }

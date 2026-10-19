@@ -107,10 +107,9 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
         if state.buttons.start { keys.insert(36) }
         // Select: Space (49)
         if state.buttons.select { keys.insert(49) }
-        // PS Button: Backspace (51 in RPCS3 Default.yml) & Escape (53)
+        // PS Button: Escape (53)
         if state.buttons.ps {
-            keys.insert(51) // Backspace
-            keys.insert(53) // Escape
+            keys.insert(53) // Escape (Safe, non-destructive)
         }
 
         // D-Pad (Default: Arrow keys)
@@ -126,28 +125,19 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
         if state.axes.lx < -stickThreshold { keys.insert(0) }   // A (Left)
         if state.axes.lx > stickThreshold { keys.insert(2) }   // D (Right)
 
-        // Right Analog Stick:
-        // RPCS3 Default binds:
-        // Up: ↖ (Home, 115)
-        // Down: ↘ (End, 119)
-        // Left: ⌦ (Forward Delete, 117)
-        // Right: ⇟ (Page Down, 121)
-        // Also include standard IKJL keys (34, 40, 38, 37) so both setups work seamlessly
+        // Right Analog Stick -> Clean alphanumeric I, K, J, L (34, 40, 38, 37)
+        // Does not send destructive Forward Delete (117) or Home (115) which trigger macOS system alert sounds
         if state.axes.ry < -stickThreshold {
-            keys.insert(115) // Home (RPCS3 Default Up)
-            keys.insert(34)  // I
+            keys.insert(34)  // I (Up)
         }
         if state.axes.ry > stickThreshold {
-            keys.insert(119) // End (RPCS3 Default Down)
-            keys.insert(40)  // K
+            keys.insert(40)  // K (Down)
         }
         if state.axes.rx < -stickThreshold {
-            keys.insert(117) // Forward Delete (RPCS3 Default Left)
-            keys.insert(38)  // J
+            keys.insert(38)  // J (Left)
         }
         if state.axes.rx > stickThreshold {
-            keys.insert(121) // Page Down (RPCS3 Default Right)
-            keys.insert(37)  // L
+            keys.insert(37)  // L (Right)
         }
 
         return keys
@@ -176,16 +166,18 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
     private func postRawKeyEvent(code: CGKeyCode, down: Bool) {
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: code, keyDown: down) else { return }
 
-        // Post to the system HID event tap
-        event.post(tap: .cghidEventTap)
-
-        // If RPCS3 is running and not frontmost, also route to its PID
-        let rpcs3App = NSWorkspace.shared.runningApplications.first(where: {
-            $0.localizedName?.lowercased().contains("rpcs3") == true
-        })
-        if let rpcs3 = rpcs3App, !rpcs3.isActive {
+        // If RPCS3 is running, route exclusively to its process PID.
+        // This isolates all gamepad keystrokes to RPCS3 and guarantees zero alert beeps on macOS.
+        if !cachedPids.isEmpty {
             for pid in cachedPids {
                 event.postToPid(pid)
+            }
+        } else {
+            // If RPCS3 is not yet open, post to HID event tap only if the frontmost app is not this companion
+            let frontApp = NSWorkspace.shared.frontmostApplication
+            let myBundleId = Bundle.main.bundleIdentifier ?? "com.antigravity.ps3companion"
+            if frontApp?.bundleIdentifier != myBundleId {
+                event.post(tap: .cghidEventTap)
             }
         }
     }

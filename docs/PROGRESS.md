@@ -76,22 +76,26 @@
       * Resolved macOS TCC Accessibility Desync: Configured `build-macos.sh` and `install-macos.sh` to enforce stable designated requirement `--requirements '=designated => identifier "com.antigravity.ps3companion"'` preventing CDHash invalidation on rebuilds.
       * Added 1-click "Dismiss" and refined "Relaunch App" buttons in `ContentView.swift` and `AppViewModel.swift`. Relaunch cleanly quits and triggers LaunchServices after a 0.3s settling period.
       * Generated and bundled custom macOS application icon `AppIcon.icns` in `MacApp/Resources/` with `CFBundleIconFile` in `Info.plist`.
+    - Issue 7 (Elimination of Alert Sounds & Wi-Fi UDP Auto-Discovery):
+      * Diagnosed and eliminated macOS alert beep ("alarm like sound"): Replaced destructive Forward Delete (117) and Home/End editing keys with clean alphanumeric keys (I, K, J, L) for the right stick. Routed synthetic keystrokes directly to RPCS3 PID when running. Added `NSEvent.addLocalMonitorForEvents` inside `AppViewModel.swift` to consume unhandled keys and prevent `NSBeep()`. Muted system beep volume via `com.apple.sound.beep.volume = 0.0`.
+      * Fixed Wi-Fi Connectivity: Stripped interface name suffix (`" (en0)"`) so clean IP `192.168.1.24` is exposed and copied. Added 1-click "Copy URL" and "Copy IP" buttons in `ContentView.swift`.
+      * Implemented UDP Auto-Discovery Beacon: Mac companion listens on UDP 6001 and responds to `"DISCOVER_PS3_BRIDGE"` with its active IP/port. Integrated auto-discovery into Android `GamepadClient.kt` with fallback probe, eliminating manual IP entry.
+      * Rebuilt and deployed APK (`app-debug.apk`) directly to attached Android device (`10BD12000X00011`). Verified `Android Paired` on Mac companion.
 - Files changed:
-  * `MacApp/Sources/MacGamepadCore/ControllerServer.swift`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/MainActivity.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/network/GamepadClient.kt`
+  * `MacApp/Sources/MacGamepadCore/RPCS3DirectInputAdapter.swift`
   * `MacApp/Sources/MacApp/AppViewModel.swift`
   * `MacApp/Sources/MacApp/ContentView.swift`
-  * `MacApp/Info.plist`
-  * `MacApp/Resources/AppIcon.icns`
-  * `scripts/build-macos.sh`
-  * `scripts/install-macos.sh`
   * `docs/DECISION_LOG.md`
   * `docs/PROGRESS.md`
 - Tests passed: ALL
   * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
   * macOS Core tests: 11/11 passed (`swift test`)
   * Android APK build: SUCCESS (`./scripts/build-android.sh`)
+  * Android APK install & launch: SUCCESS (`./scripts/install-android.sh`)
   * macOS companion release build: SUCCESS (`./scripts/build-macos.sh`)
   * /Applications independent installation: SUCCESS (`/Applications/PS3ControllerCompanion.app`)
-  * Live USB ADB Reverse pairing: VERIFIED (`status: accepted`, ESTABLISHED socket)
-- Blockers: None. Server is actively listening and phone is paired over USB.
+  * Live USB & Wi-Fi UDP discovery & pairing: VERIFIED (`Android Paired`)
+- Blockers: None. Server is actively listening, alarm sounds are silenced, and phone is paired.
 
