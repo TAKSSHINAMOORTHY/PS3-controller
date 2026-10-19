@@ -48,7 +48,7 @@ public struct ContentView: View {
                 Spacer()
 
                 HStack(spacing: 8) {
-                    if !model.isAccessibilityGranted {
+                    if !model.isAccessibilityGranted && !model.userDismissedAccessibilityWarning {
                         Button(action: { model.requestAccessibilityPermission() }) {
                             HStack(spacing: 4) {
                                 Image(systemName: "gearshape.fill")
@@ -65,7 +65,7 @@ public struct ContentView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "arrow.clockwise.circle.fill")
                                     .foregroundColor(.white)
-                                Text("2. Relaunch to Apply")
+                                Text("2. Relaunch App")
                                     .font(.caption)
                                     .fontWeight(.semibold)
                             }
@@ -107,17 +107,23 @@ public struct ContentView: View {
             .padding(.vertical, 12)
             .background(Color(NSColor.controlBackgroundColor))
 
-            if !model.isAccessibilityGranted {
-                HStack(spacing: 6) {
+            if !model.isAccessibilityGranted && !model.userDismissedAccessibilityWarning {
+                HStack(spacing: 8) {
                     Image(systemName: "info.circle.fill")
                         .foregroundColor(.orange)
                         .font(.caption)
-                    Text("macOS requires an app relaunch after toggling Accessibility ON in System Settings. If you already approved it, click '2. Relaunch to Apply'.")
+                    Text("If you toggled Accessibility ON in System Settings, click 'Relaunch App' to activate it, or 'Dismiss' if input is already working.")
                         .font(.caption)
                         .foregroundColor(.primary)
                     Spacer()
-                    Button("Relaunch Now") {
+                    Button("Relaunch App") {
                         model.relaunchApp()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button("Dismiss") {
+                        model.dismissAccessibilityWarning()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

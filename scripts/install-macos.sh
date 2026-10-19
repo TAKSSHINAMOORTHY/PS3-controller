@@ -29,12 +29,16 @@ if [ ! -w "/Applications" ]; then
     TARGET_DEST="${DEST_USER}"
 fi
 
+# Gracefully terminate running instance if active before updating files
+pkill -f "PS3ControllerCompanion" 2>/dev/null || true
+sleep 0.5
+
 echo "📦 Copying ${APP_BUNDLE} to ${TARGET_DEST}..."
 rm -rf "${TARGET_DEST}"
 cp -R "${APP_BUNDLE}" "${TARGET_DEST}"
 
-# Re-sign installed copy
-codesign --force --deep --sign - "${TARGET_DEST}"
+# Re-sign installed copy with stable bundle identifier designated requirement for persistent TCC accessibility
+codesign --force --deep -s - --requirements '=designated => identifier "com.antigravity.ps3companion"' "${TARGET_DEST}"
 
 echo ""
 echo "=================================================="

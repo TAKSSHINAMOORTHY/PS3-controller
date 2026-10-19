@@ -54,6 +54,13 @@ public final class AppViewModel: ObservableObject {
     }
 
     @Published public var hasRequestedAccessibility: Bool = false
+    @Published public var userDismissedAccessibilityWarning: Bool = false
+
+    public func dismissAccessibilityWarning() {
+        self.userDismissedAccessibilityWarning = true
+        self.isAccessibilityGranted = true
+        addLog("Accessibility warning dismissed by user.")
+    }
 
     public func refreshAccessibilityStatus() {
         let current = RPCS3DirectInputAdapter.isAccessibilityPermissionGranted
@@ -81,23 +88,14 @@ public final class AppViewModel: ObservableObject {
 
     public func relaunchApp() {
         addLog("Relaunching companion app to activate system permissions...")
-        let bundleURL = Bundle.main.bundleURL
-        if bundleURL.pathExtension == "app" {
-            let config = NSWorkspace.OpenConfiguration()
-            config.createsNewApplicationInstance = true
-            NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
-                DispatchQueue.main.async {
-                    NSApp.terminate(nil)
-                }
-            }
-        } else {
-            let appURL = URL(fileURLWithPath: "/Applications/PS3ControllerCompanion.app")
-            if FileManager.default.fileExists(atPath: appURL.path) {
-                NSWorkspace.shared.open(appURL)
-            }
-            DispatchQueue.main.async {
-                NSApp.terminate(nil)
-            }
+        let bundlePath = Bundle.main.bundleURL.pathExtension == "app" ? Bundle.main.bundleURL.path : "/Applications/PS3ControllerCompanion.app"
+        let script = "sleep 0.3 && open '\(bundlePath)'"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", script]
+        try? task.run()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSApp.terminate(nil)
         }
     }
 

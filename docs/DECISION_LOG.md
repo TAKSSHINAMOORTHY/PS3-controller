@@ -83,3 +83,12 @@
 - Decision: Replace coarse 7-cluster layout model with a granular `ControlId` enumeration covering all 19 individual controls (Cross, Circle, Square, Triangle, D-pad Up/Down/Left/Right, L1, R1, L2, R2, L3, R3, Start, Select, PS, Left Stick, Right Stick). Each control stores independent position $(x, y)$, scale factor, opacity, and sensitivity in `ControllerLayoutConfig`.
 - Reason: Users require complete freedom to reposition or resize each individual button (e.g. moving D-pad Up without affecting Down/Left/Right, or resizing Cross without resizing Square).
 
+## D-015 — Non-Blocking Server Stop and Persistent TCC Accessibility Signing
+- Status: Accepted
+- Decision:
+  1. Replace `NSLock` with `NSRecursiveLock` in `ControllerServer.swift` and release lock prior to invoking `updateStatus(.stopped)` to prevent recursive deadlock and UI hang on "Stop Server".
+  2. Sign `PS3ControllerCompanion.app` with `--requirements '=designated => identifier "com.antigravity.ps3companion"'` so macOS TCC Accessibility grants persist across builds instead of being tied to ephemeral CDHashes.
+  3. Include an immediate "Relaunch App" and "Dismiss" workflow in `ContentView.swift` and `AppViewModel.swift`, accommodating the macOS requirement that already-running processes must be restarted for newly toggled Accessibility rights to take effect.
+  4. Embed high-resolution controller `AppIcon.icns` in the application bundle to ensure legitimate visual presence in System Settings and the macOS Dock.
+- Reason: macOS freezes when a thread acquires a non-recursive lock twice, and macOS TCC never applies accessibility trust dynamically to an active running process until it is restarted.
+

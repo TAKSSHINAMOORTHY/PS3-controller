@@ -38,6 +38,10 @@ mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
 cp "${BINARY_SOURCE}" "${APP_BUNDLE}/Contents/MacOS/PS3ControllerCompanion"
 
+if [ -f "${MAC_DIR}/Resources/AppIcon.icns" ]; then
+    cp "${MAC_DIR}/Resources/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+fi
+
 if [ -f "${MAC_DIR}/Info.plist" ]; then
     cp "${MAC_DIR}/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
 elif [ -f "${APP_BUNDLE}/Contents/Info.plist" ]; then
@@ -68,9 +72,9 @@ else
 EOF
 fi
 
-# Ad-hoc sign for local execution
-echo "✍️ Applying ad-hoc codesign..."
-codesign --force --deep --sign - "${APP_BUNDLE}"
+# Ad-hoc sign with stable bundle identifier designated requirement for persistent TCC accessibility
+echo "✍️ Applying ad-hoc codesign with stable designated requirement..."
+codesign --force --deep -s - --requirements '=designated => identifier "com.antigravity.ps3companion"' "${APP_BUNDLE}"
 
 echo ""
 echo "=================================================="
