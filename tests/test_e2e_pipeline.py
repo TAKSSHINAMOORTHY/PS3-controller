@@ -12,7 +12,7 @@ from hashlib import sha1
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-def make_ws_handshake(host="127.0.0.1", port=6000):
+def make_ws_handshake(host="127.0.0.1", port=6006):
     key = base64.b64encode(os.urandom(16)).decode('utf-8')
     req = (
         f"GET / HTTP/1.1\r\n"
@@ -121,8 +121,9 @@ def run_e2e_test():
     if not os.path.exists(mac_app_bin):
         mac_app_bin = "/Users/datchu/Downloads/Projects/ps3/MacApp/.build/debug/MacApp"
         
-    print(f"[SETUP] Launching MacApp from {mac_app_bin}...")
-    mac_proc = subprocess.Popen([mac_app_bin, "--headless"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    test_port = 6006
+    print(f"[SETUP] Launching MacApp from {mac_app_bin} on port {test_port}...")
+    mac_proc = subprocess.Popen([mac_app_bin, "--headless", "--port", str(test_port)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     time.sleep(1.5)
     
     # 4. Start monitor_sdl
@@ -142,14 +143,14 @@ def run_e2e_test():
     time.sleep(1.0)
     
     try:
-        # 5. Connect to MacApp on port 6000
-        print("[TEST] Connecting client socket to ws://127.0.0.1:6000...")
+        # 5. Connect to MacApp on port 6006
+        print(f"[TEST] Connecting client socket to ws://127.0.0.1:{test_port}...")
         client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_sock.settimeout(5.0)
-        client_sock.connect(("127.0.0.1", 6000))
+        client_sock.connect(("127.0.0.1", test_port))
         
         # 6. WebSocket Handshake
-        handshake_data, sec_key = make_ws_handshake()
+        handshake_data, sec_key = make_ws_handshake(port=test_port)
         client_sock.sendall(handshake_data)
         resp = client_sock.recv(4096).decode('utf-8', errors='ignore')
         assert "101 Switching Protocols" in resp, f"Handshake failed: {resp}"

@@ -8,7 +8,7 @@ import time
 import subprocess
 from hashlib import sha1
 
-def make_ws_handshake(host="127.0.0.1", port=6000):
+def make_ws_handshake(host="127.0.0.1", port=6005):
     key = base64.b64encode(os.urandom(16)).decode('utf-8')
     req = (
         f"GET / HTTP/1.1\r\n"
@@ -82,15 +82,16 @@ def run_resilience_tests():
     print("=== STARTING PHASE 6 RESILIENCE & BOUNDARY TESTS ===")
 
     mac_app_bin = "/Users/datchu/Downloads/Projects/ps3/MacApp/.build/debug/MacApp"
-    mac_proc = subprocess.Popen([mac_app_bin, "--headless"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    test_port = 6005
+    mac_proc = subprocess.Popen([mac_app_bin, "--headless", "--port", str(test_port)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     time.sleep(1.0)
 
     try:
         # TEST 1: Handshake and pairing
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(3.0)
-        s.connect(("127.0.0.1", 6000))
-        h_data, _ = make_ws_handshake()
+        s.connect(("127.0.0.1", test_port))
+        h_data, _ = make_ws_handshake(port=test_port)
         s.sendall(h_data)
         resp = s.recv(4096).decode('utf-8', errors='ignore')
         assert "101 Switching Protocols" in resp, "Handshake failed"
@@ -170,8 +171,8 @@ def run_resilience_tests():
 
         s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s2.settimeout(3.0)
-        s2.connect(("127.0.0.1", 6000))
-        h2_data, _ = make_ws_handshake()
+        s2.connect(("127.0.0.1", test_port))
+        h2_data, _ = make_ws_handshake(port=test_port)
         s2.sendall(h2_data)
         resp2 = s2.recv(4096).decode('utf-8', errors='ignore')
         assert "101 Switching Protocols" in resp2

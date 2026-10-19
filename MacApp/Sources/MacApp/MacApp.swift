@@ -23,9 +23,15 @@ struct Launcher {
     }
 
     static func runHeadless() {
-        print("[PS3-Companion] Starting in headless mode on port 6000...")
+        var port: UInt16 = 6000
+        if let portIndex = CommandLine.arguments.firstIndex(of: "--port"),
+           portIndex + 1 < CommandLine.arguments.count,
+           let customPort = UInt16(CommandLine.arguments[portIndex + 1]) {
+            port = customPort
+        }
+        print("[PS3-Companion] Starting in headless mode on port \(port)...")
         let adapter = DriverKitGamerPadAdapter(host: "127.0.0.1", port: 8080)
-        let server = ControllerServer(port: 6000, backend: adapter)
+        let server = ControllerServer(port: port, backend: adapter)
 
         server.onStatusChanged = { status in
             print("[PS3-Companion] Server status: \(status)")
