@@ -24,7 +24,7 @@ public final class ControllerServer: @unchecked Sendable {
     private var lastMessageDate: Date = .distantPast
     private var timeoutTimer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "com.antigravity.controllerserver", qos: .userInteractive)
-    private let lock = NSLock()
+    private let lock = NSRecursiveLock()
 
     public init(port: UInt16 = 6000, backend: GamepadBackend) {
         self.port = port
@@ -67,8 +67,6 @@ public final class ControllerServer: @unchecked Sendable {
 
     public func stop() {
         lock.lock()
-        defer { lock.unlock() }
-
         timeoutTimer?.cancel()
         timeoutTimer = nil
 
@@ -79,6 +77,8 @@ public final class ControllerServer: @unchecked Sendable {
         listener = nil
 
         validator.reset()
+        lock.unlock()
+
         updateStatus(.stopped)
 
         Task {

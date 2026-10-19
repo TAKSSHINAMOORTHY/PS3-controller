@@ -53,6 +53,8 @@ public final class AppViewModel: ObservableObject {
             }
     }
 
+    @Published public var hasRequestedAccessibility: Bool = false
+
     public func refreshAccessibilityStatus() {
         let current = RPCS3DirectInputAdapter.isAccessibilityPermissionGranted
         if current != self.isAccessibilityGranted {
@@ -64,6 +66,7 @@ public final class AppViewModel: ObservableObject {
     }
 
     public func requestAccessibilityPermission() {
+        hasRequestedAccessibility = true
         let trusted = RPCS3DirectInputAdapter.requestAccessibilityPrompt()
         self.isAccessibilityGranted = trusted
         if !trusted {
@@ -73,6 +76,28 @@ public final class AppViewModel: ObservableObject {
             }
         } else {
             addLog("Accessibility permission is already active.")
+        }
+    }
+
+    public func relaunchApp() {
+        addLog("Relaunching companion app to activate system permissions...")
+        let bundleURL = Bundle.main.bundleURL
+        if bundleURL.pathExtension == "app" {
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
+                DispatchQueue.main.async {
+                    NSApp.terminate(nil)
+                }
+            }
+        } else {
+            let appURL = URL(fileURLWithPath: "/Applications/PS3ControllerCompanion.app")
+            if FileManager.default.fileExists(atPath: appURL.path) {
+                NSWorkspace.shared.open(appURL)
+            }
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
         }
     }
 

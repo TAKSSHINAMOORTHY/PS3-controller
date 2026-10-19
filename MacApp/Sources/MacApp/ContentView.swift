@@ -31,68 +31,102 @@ public struct ContentView: View {
 
     // MARK: - Header Bar
     private var headerBar: some View {
-        HStack {
-            Image(systemName: "gamecontroller.fill")
-                .font(.system(size: 24))
-                .foregroundColor(.blue)
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "gamecontroller.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.blue)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("PS3 Virtual Gamepad Bridge")
-                    .font(.headline)
-                Text("RPCS3 Native macOS Companion")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            HStack(spacing: 8) {
-                if !model.isAccessibilityGranted {
-                    Button(action: { model.requestAccessibilityPermission() }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.yellow)
-                            Text("Grant Accessibility")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
-                } else {
-                    statusPill(
-                        title: "Accessibility: OK",
-                        isActive: true,
-                        activeColor: .green,
-                        inactiveColor: .gray
-                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("PS3 Virtual Gamepad Bridge")
+                        .font(.headline)
+                    Text("RPCS3 Native macOS Companion")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
 
-                statusPill(
-                    title: "RPCS3 Bridge",
-                    isActive: model.isBackendConnected,
-                    activeColor: .green,
-                    inactiveColor: .orange
-                )
+                Spacer()
 
-                statusPill(
-                    title: "USB: \(model.usbStatusText)",
-                    isActive: model.isUsbAdbConfigured,
-                    activeColor: .green,
-                    inactiveColor: .secondary
-                )
+                HStack(spacing: 8) {
+                    if !model.isAccessibilityGranted {
+                        Button(action: { model.requestAccessibilityPermission() }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "gearshape.fill")
+                                    .foregroundColor(.yellow)
+                                Text("1. Open Settings")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
 
-                statusPill(
-                    title: model.isClientConnected ? "Android Paired" : (model.isListening ? "Listening" : (model.isStarting ? "Starting..." : "Offline")),
-                    isActive: model.isListening,
-                    activeColor: model.isClientConnected ? .blue : .green,
-                    inactiveColor: .red
-                )
+                        Button(action: { model.relaunchApp() }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.clockwise.circle.fill")
+                                    .foregroundColor(.white)
+                                Text("2. Relaunch to Apply")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                    } else {
+                        statusPill(
+                            title: "Accessibility: OK",
+                            isActive: true,
+                            activeColor: .green,
+                            inactiveColor: .gray
+                        )
+                    }
+
+                    statusPill(
+                        title: "RPCS3 Bridge",
+                        isActive: model.isBackendConnected,
+                        activeColor: .green,
+                        inactiveColor: .orange
+                    )
+
+                    statusPill(
+                        title: "USB: \(model.usbStatusText)",
+                        isActive: model.isUsbAdbConfigured,
+                        activeColor: .green,
+                        inactiveColor: .secondary
+                    )
+
+                    statusPill(
+                        title: model.isClientConnected ? "Android Paired" : (model.isListening ? "Listening" : (model.isStarting ? "Starting..." : "Offline")),
+                        isActive: model.isListening,
+                        activeColor: model.isClientConnected ? .blue : .green,
+                        inactiveColor: .red
+                    )
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(NSColor.controlBackgroundColor))
+
+            if !model.isAccessibilityGranted {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                    Text("macOS requires an app relaunch after toggling Accessibility ON in System Settings. If you already approved it, click '2. Relaunch to Apply'.")
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Button("Relaunch Now") {
+                        model.relaunchApp()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.12))
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(NSColor.controlBackgroundColor))
     }
 
     private func statusPill(title: String, isActive: Bool, activeColor: Color, inactiveColor: Color) -> some View {
