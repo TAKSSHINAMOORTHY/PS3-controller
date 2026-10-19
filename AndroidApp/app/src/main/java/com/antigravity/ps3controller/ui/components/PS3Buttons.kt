@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,45 +44,55 @@ fun PressablePadButton(
     fontSize: Int = 20,
     scale: Float = 1.0f,
     sensitivity: Float = 1.0f,
+    enabled: Boolean = true,
     onPressChanged: (Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
+    val currentOnPressChanged by rememberUpdatedState(onPressChanged)
 
     val effectiveSize = size * scale
     val effectiveFontSize = (fontSize * scale).coerceAtLeast(10f).toInt()
     val shape = if (isRound) CircleShape else RoundedCornerShape((8 * scale).dp)
-    val bgColor = if (isPressed) {
+    val bgColor = if (isPressed && enabled) {
         accentColor.copy(alpha = (0.85f * sensitivity.coerceIn(0.5f, 1.2f)).coerceIn(0.5f, 1.0f))
     } else {
         Color(0xFF23272E)
     }
-    val textColor = if (isPressed) Color.White else accentColor
+    val textColor = if (isPressed && enabled) Color.White else accentColor
+
+    val inputModifier = if (enabled) {
+        Modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val pointerId = down.id
+                down.consume()
+                isPressed = true
+                currentOnPressChanged(true)
+
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId }
+                        if (change == null || !change.pressed) {
+                            break
+                        }
+                    }
+                } finally {
+                    isPressed = false
+                    currentOnPressChanged(false)
+                }
+            }
+        }
+    } else Modifier
 
     Box(
         modifier = modifier
             .size(effectiveSize)
-            .shadow(if (isPressed) 2.dp else 4.dp, shape)
+            .shadow(if (isPressed && enabled) 2.dp else 4.dp, shape)
             .clip(shape)
             .background(bgColor)
-            .border((2 * scale).dp.coerceAtLeast(1.dp), if (isPressed) accentColor else Color(0xFF383E4A), shape)
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    down.consume()
-                    isPressed = true
-                    onPressChanged(true)
-
-                    var isUp = false
-                    while (!isUp) {
-                        val event = awaitPointerEvent()
-                        if (event.changes.all { !it.pressed }) {
-                            isUp = true
-                        }
-                    }
-                    isPressed = false
-                    onPressChanged(false)
-                }
-            },
+            .border((2 * scale).dp.coerceAtLeast(1.dp), if (isPressed && enabled) accentColor else Color(0xFF383E4A), shape)
+            .then(inputModifier),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -258,44 +269,54 @@ fun ShoulderButton(
     height: Dp = 38.dp,
     scale: Float = 1.0f,
     sensitivity: Float = 1.0f,
+    enabled: Boolean = true,
     onPressChanged: (Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
+    val currentOnPressChanged by rememberUpdatedState(onPressChanged)
     val shape = RoundedCornerShape((6 * scale).dp)
     val effectiveWidth = width * scale
     val effectiveHeight = height * scale
     val activeColor = Color(0xFF3B82F6)
+
+    val inputModifier = if (enabled) {
+        Modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val pointerId = down.id
+                down.consume()
+                isPressed = true
+                currentOnPressChanged(true)
+
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId }
+                        if (change == null || !change.pressed) {
+                            break
+                        }
+                    }
+                } finally {
+                    isPressed = false
+                    currentOnPressChanged(false)
+                }
+            }
+        }
+    } else Modifier
 
     Box(
         modifier = modifier
             .width(effectiveWidth)
             .height(effectiveHeight)
             .clip(shape)
-            .background(if (isPressed) activeColor.copy(alpha = (0.9f * sensitivity.coerceIn(0.5f, 1.2f)).coerceIn(0.5f, 1.0f)) else Color(0xFF282D36))
+            .background(if (isPressed && enabled) activeColor.copy(alpha = (0.9f * sensitivity.coerceIn(0.5f, 1.2f)).coerceIn(0.5f, 1.0f)) else Color(0xFF282D36))
             .border((1.5 * scale).dp.coerceAtLeast(1.dp), Color(0xFF475060), shape)
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    down.consume()
-                    isPressed = true
-                    onPressChanged(true)
-
-                    var isUp = false
-                    while (!isUp) {
-                        val event = awaitPointerEvent()
-                        if (event.changes.all { !it.pressed }) {
-                            isUp = true
-                        }
-                    }
-                    isPressed = false
-                    onPressChanged(false)
-                }
-            },
+            .then(inputModifier),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = if (isPressed) Color.White else Color(0xFFCBD5E1),
+            color = if (isPressed && enabled) Color.White else Color(0xFFCBD5E1),
             fontSize = ((13 * scale).coerceAtLeast(9f)).sp,
             fontWeight = FontWeight.Bold
         )
@@ -312,48 +333,58 @@ fun SystemPillButton(
     isSpecial: Boolean = false,
     scale: Float = 1.0f,
     sensitivity: Float = 1.0f,
+    enabled: Boolean = true,
     onPressChanged: (Boolean) -> Unit
 ) {
     var isPressed by remember { mutableStateOf(false) }
+    val currentOnPressChanged by rememberUpdatedState(onPressChanged)
     val shape = if (isSpecial) CircleShape else RoundedCornerShape((12 * scale).dp)
     val effectiveWidth = (if (isSpecial) 44.dp else 56.dp) * scale
     val effectiveHeight = (if (isSpecial) 44.dp else 32.dp) * scale
+
+    val inputModifier = if (enabled) {
+        Modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val pointerId = down.id
+                down.consume()
+                isPressed = true
+                currentOnPressChanged(true)
+
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId }
+                        if (change == null || !change.pressed) {
+                            break
+                        }
+                    }
+                } finally {
+                    isPressed = false
+                    currentOnPressChanged(false)
+                }
+            }
+        }
+    } else Modifier
 
     Box(
         modifier = modifier
             .size(width = effectiveWidth, height = effectiveHeight)
             .clip(shape)
             .background(
-                if (isPressed) {
+                if (isPressed && enabled) {
                     if (isSpecial) Color(0xFFF59E0B) else Color(0xFF3B82F6)
                 } else {
                     Color(0xFF1E2229)
                 }
             )
             .border((1 * scale).dp.coerceAtLeast(1.dp), Color(0xFF3F4654), shape)
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    down.consume()
-                    isPressed = true
-                    onPressChanged(true)
-
-                    var isUp = false
-                    while (!isUp) {
-                        val event = awaitPointerEvent()
-                        if (event.changes.all { !it.pressed }) {
-                            isUp = true
-                        }
-                    }
-                    isPressed = false
-                    onPressChanged(false)
-                }
-            },
+            .then(inputModifier),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = if (isPressed) Color.White else (if (isSpecial) Color(0xFFF59E0B) else Color(0xFF94A3B8)),
+            color = if (isPressed && enabled) Color.White else (if (isSpecial) Color(0xFFF59E0B) else Color(0xFF94A3B8)),
             fontSize = (if (isSpecial) 14 * scale else 10 * scale).coerceAtLeast(8f).sp,
             fontWeight = FontWeight.Bold
         )

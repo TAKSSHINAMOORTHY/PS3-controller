@@ -23,12 +23,35 @@ import com.antigravity.ps3controller.ui.SettingsDialog
 class MainActivity : ComponentActivity() {
 
     private var client: GamepadClient? = null
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Keep CPU and Wi-Fi radio at high performance so cutscenes never drop connectivity
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            wakeLock = powerManager?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "PS3Controller::WakeLock")?.apply {
+                setReferenceCounted(false)
+                acquire(60 * 60 * 1000L) // 1 hour lease
+            }
+
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                wifiLock = wifiManager?.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "PS3Controller::WifiLock")
+            } else {
+                @Suppress("DEPRECATION")
+                wifiLock = wifiManager?.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "PS3Controller::WifiLock")
+            }
+            wifiLock?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (_: Exception) {}
 
         val prefs = getSharedPreferences("ps3_controller_prefs", Context.MODE_PRIVATE)
 
@@ -48,7 +71,7 @@ class MainActivity : ComponentActivity() {
                 val intentPort = intent?.getIntExtra("port", 0)?.takeIf { it > 0 }
                 mutableIntStateOf(intentPort ?: prefs.getInt("port", 6000))
             }
-            var deadZone by remember { mutableFloatStateOf(prefs.getFloat("deadzone", 0.05f)) }
+            var deadZone by remember { mutableFloatStateOf(prefs.getFloat("deadzone", 0.15f)) }
             var sensitivity by remember { mutableFloatStateOf(prefs.getFloat("sensitivity", 1.0f)) }
             var buttonSensitivity by remember { mutableFloatStateOf(prefs.getFloat("button_sensitivity", 1.0f)) }
             var haptics by remember { mutableStateOf(prefs.getBoolean("haptics", true)) }
@@ -157,5 +180,13 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         // Neutralize and disconnect to prevent sticking inputs
         client?.disconnect()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (_: Exception) {}
     }
 }

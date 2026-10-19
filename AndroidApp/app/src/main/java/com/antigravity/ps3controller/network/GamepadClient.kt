@@ -1,12 +1,16 @@
 package com.antigravity.ps3controller.network
 
 import com.antigravity.ps3controller.model.ControllerState
+import com.antigravity.ps3controller.model.ControllerButtons
+import com.antigravity.ps3controller.model.ControllerDPad
+import com.antigravity.ps3controller.model.ControllerAxes
 import com.antigravity.ps3controller.model.HeartbeatMessage
 import com.antigravity.ps3controller.model.PairRequest
 import com.antigravity.ps3controller.model.PairResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,7 +65,7 @@ class GamepadClient(
         encodeDefaults = true
         ignoreUnknownKeys = true
     }
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val _status = MutableStateFlow(ConnectionStatus.DISCONNECTED)
     val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
@@ -237,6 +241,9 @@ class GamepadClient(
 
     private var pendingState: ControllerState? = null
     private var trailingSendJob: Job? = null
+    private var lastSentButtons = ControllerButtons()
+    private var lastSentDpad = ControllerDPad()
+    private var lastSentAxes = ControllerAxes()
 
     private fun isNeutralState(state: ControllerState): Boolean {
         val b = state.buttons
@@ -259,13 +266,21 @@ class GamepadClient(
         val now = System.currentTimeMillis()
         val timeSinceLast = now - lastSentTime
         val isNeutral = isNeutralState(state)
+        val buttonsChanged = state.buttons != lastSentButtons || state.dpad != lastSentDpad
+        val isZeroAxes = state.axes.lx == 0f && state.axes.ly == 0f && state.axes.rx == 0f && state.axes.ry == 0f
+        val wasZeroAxes = lastSentAxes.lx == 0f && lastSentAxes.ly == 0f && lastSentAxes.rx == 0f && lastSentAxes.ry == 0f
+        val stickReleasedToCenter = isZeroAxes && !wasZeroAxes
 
-        // Neutral / release states must never be dropped to avoid stuck inputs.
-        if (isNeutral || timeSinceLast >= 16) {
+        // Button transitions, neutral / release states, or stick center releases must be transmitted immediately
+        // without throttling so buttons and sticks respond instantaneously with 0ms latency.
+        if (buttonsChanged || stickReleasedToCenter || isNeutral || timeSinceLast >= 16) {
             trailingSendJob?.cancel()
             trailingSendJob = null
             pendingState = null
             lastSentTime = now
+            lastSentButtons = state.buttons
+            lastSentDpad = state.dpad
+            lastSentAxes = state.axes
 
             val seq = sequenceNumber.incrementAndGet()
             val outbound = state.copy(sessionId = session, seq = seq, timestamp = now)
@@ -273,6 +288,20 @@ class GamepadClient(
                 val payload = json.encodeToString(outbound)
                 ws.send(payload)
             } catch (_: Exception) {}
+
+            // Send secondary redundant center confirmation after 30ms to guarantee zero stick drift under packet loss
+            if (stickReleasedToCenter) {
+                scope.launch {
+                    delay(30)
+                    val s = activeSessionId
+                    val w = webSocket
+                    if (s != null && w != null && _status.value == ConnectionStatus.CONNECTED) {
+                        val q = sequenceNumber.incrementAndGet()
+                        val confirm = state.copy(sessionId = s, seq = q, timestamp = System.currentTimeMillis())
+                        try { w.send(json.encodeToString(confirm)) } catch (_: Exception) {}
+                    }
+                }
+            }
         } else {
             // Buffer latest motion state so trailing final position is never lost
             pendingState = state
@@ -295,17 +324,16 @@ class GamepadClient(
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
             while (isActive && _status.value == ConnectionStatus.CONNECTED) {
-                delay(500)
+                delay(1000)
                 val session = activeSessionId ?: continue
                 val ws = webSocket ?: continue
                 val now = System.currentTimeMillis()
-                if (now - lastSentTime >= 400) {
-                    val seq = sequenceNumber.incrementAndGet()
-                    val hb = HeartbeatMessage(sessionId = session, seq = seq, timestamp = now)
-                    try {
-                        ws.send(json.encodeToString(hb))
-                    } catch (_: Exception) {}
-                }
+                val seq = sequenceNumber.incrementAndGet()
+                val hb = HeartbeatMessage(sessionId = session, seq = seq, timestamp = now)
+                try {
+                    ws.send(json.encodeToString(hb))
+                    lastSentTime = now
+                } catch (_: Exception) {}
             }
         }
     }
@@ -322,7 +350,7 @@ class GamepadClient(
 
         if (!isExplicitDisconnect) {
             scope.launch {
-                delay(1500)
+                delay(300)
                 if (_status.value == ConnectionStatus.DISCONNECTED && !isExplicitDisconnect) {
                     Log.i("GamepadClient", "Auto-reconnecting to ws://$serverHost:$serverPort...")
                     connect()

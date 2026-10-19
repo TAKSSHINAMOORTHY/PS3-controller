@@ -29,59 +29,64 @@ fun JoystickStick(
     size: Dp = 140.dp,
     deadZone: Float = 0.05f,
     sensitivity: Float = 1.0f,
+    enabled: Boolean = true,
     onMove: (Float, Float) -> Unit
 ) {
     var knobOffsetX by remember { mutableFloatStateOf(0f) }
     var knobOffsetY by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
 
+    val inputModifier = if (enabled) {
+        Modifier.pointerInput(deadZone, sensitivity, size) {
+            val center = Offset(size.toPx() / 2f, size.toPx() / 2f)
+            val maxRadius = (size.toPx() / 2f) * 0.7f
+
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val pointerId = down.id
+                isDragging = true
+
+                fun updateStickPosition(touchPos: Offset) {
+                    val dx = touchPos.x - center.x
+                    val dy = touchPos.y - center.y
+                    val dist = hypot(dx, dy)
+                    val clampedDist = min(dist, maxRadius)
+                    val angle = if (dist > 0f) (dx / dist) to (dy / dist) else 0f to 0f
+
+                    knobOffsetX = angle.first * clampedDist
+                    knobOffsetY = angle.second * clampedDist
+
+                    val result = TouchInputMapper.mapStick(dx, dy, maxRadius, deadZone, sensitivity)
+                    onMove(result.x, result.y)
+                }
+
+                down.consume()
+                updateStickPosition(down.position)
+
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId }
+                        if (change == null || !change.pressed) {
+                            break
+                        }
+                        change.consume()
+                        updateStickPosition(change.position)
+                    }
+                } finally {
+                    isDragging = false
+                    knobOffsetX = 0f
+                    knobOffsetY = 0f
+                    onMove(0f, 0f)
+                }
+            }
+        }
+    } else Modifier
+
     Box(
         modifier = modifier
             .size(size)
-            .pointerInput(deadZone, sensitivity, size) {
-                val center = Offset(size.toPx() / 2f, size.toPx() / 2f)
-                val maxRadius = (size.toPx() / 2f) * 0.7f
-
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val pointerId = down.id
-                    isDragging = true
-
-                    fun updateStickPosition(touchPos: Offset) {
-                        val dx = touchPos.x - center.x
-                        val dy = touchPos.y - center.y
-                        val dist = hypot(dx, dy)
-                        val clampedDist = min(dist, maxRadius)
-                        val angle = if (dist > 0f) (dx / dist) to (dy / dist) else 0f to 0f
-
-                        knobOffsetX = angle.first * clampedDist
-                        knobOffsetY = angle.second * clampedDist
-
-                        val result = TouchInputMapper.mapStick(dx, dy, maxRadius, deadZone, sensitivity)
-                        onMove(result.x, result.y)
-                    }
-
-                    down.consume()
-                    updateStickPosition(down.position)
-
-                    try {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == pointerId }
-                            if (change == null || !change.pressed) {
-                                break
-                            }
-                            change.consume()
-                            updateStickPosition(change.position)
-                        }
-                    } finally {
-                        isDragging = false
-                        knobOffsetX = 0f
-                        knobOffsetY = 0f
-                        onMove(0f, 0f)
-                    }
-                }
-            }
+            .then(inputModifier)
     ) {
         Canvas(modifier = Modifier.size(size)) {
             val center = Offset(this.size.width / 2f, this.size.height / 2f)

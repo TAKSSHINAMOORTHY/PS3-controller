@@ -105,3 +105,63 @@
      - Add 1-click "Copy URL" and "Copy IP" buttons in `ContentView.swift`.
      - Implement UDP discovery beacon on port 6001 on the Mac companion and client auto-discovery in `GamepadClient.kt` so the mobile app detects the Mac automatically over Wi-Fi without manual IP entry.
 - Reason: Unhandled keys posted to non-text controls triggered macOS system beeps, and corrupted IP strings broke Wi-Fi connection attempts.
+
+## D-017 — Direct Tap Selection, Freeform Drag Repositioning & D-Pad Center Box Removal
+- Status: Accepted
+- Decision:
+  1. Freeform Tap & Drag Gesture Handling in Edit Mode:
+     - Added `enabled: Boolean = true` to `PressablePadButton`, `ShoulderButton`, `SystemPillButton`, and `JoystickStick`. In Edit Mode (`enabled = false`), buttons do not attach gesture detectors (`pointerInput`), allowing `EditableControl`'s selection and drag gestures to receive touch events unconditionally.
+     - Implemented `detectTapGestures(onTap = { currentOnSelect() })` and `detectDragGestures(onDragStart = { currentOnSelect() }, onDrag = { change, dragAmount -> currentOnDragDelta(dragAmount.x, dragAmount.y) })` on `EditableControl` with `rememberUpdatedState` to eliminate stale closure bugs during continuous dragging.
+     - Controls can now be tapped directly to select them and dragged freely across the screen without relying solely on toolbar nudge buttons.
+  2. D-pad Down Arrow & Phantom Button Fix:
+     - Eliminated the static 48dp center hub Box (`Box(size = 48.dp, background = Color(0xFF1E2229))`) that sat behind the D-pad buttons. Previously, if the Down arrow was repositioned, this center hub remained exposed underneath, appearing as a phantom duplicate button.
+     - Flattened all 19 controls into direct children of the full-canvas `BoxWithConstraints`, removing nested sub-boxes (e.g. 52dp align boxes within a 164dp container) that pruned Compose touch event dispatch when controls were offset.
+     - Verified that in normal mode, D-pad Down receives touch input responsively, lights up on press, and transmits valid gamepad state snapshots.
+
+
+## D-018 — Right Analog Stick Dual-Mapping for In-Game Evasion / Dodge
+- Status: Accepted
+- Decision:
+  1. Update `RPCS3DirectInputAdapter.swift` to dual-map the Right Analog Stick to:
+     - RPCS3 native Player 1 `Default.yml` keys: Up: `Home` (115), Down: `End` (119), Left: `Forward Delete` (117), Right: `Page Down` (121).
+     - Alphanumeric aliases: Up: `I` (34), Down: `K` (40), Left: `J` (38), Right: `L` (37).
+  2. Reduced stick deflection threshold from 0.25 to 0.20 for responsive in-game evasion.
+  3. Updated `postRawKeyEvent` to post directly to `.cghidEventTap` when RPCS3 is the focused frontmost application, ensuring Qt/Vulkan/MoltenVK receives events with immediate priority.
+- Reason: RPCS3’s default keyboard profile specifically binds Right Stick to navigation keys (Home, End, Page Down, Delete). Previous code was only sending alphanumeric keys (I, K, J, L), causing RPCS3 to ignore all right analog stick movement and preventing combat dodging in God of War III.
+
+## D-019 — Multi-Touch Pointer ID Tracking & Instant Unthrottled Button Transmission
+- Status: Accepted
+- Decision:
+  1. Multi-Touch Per-Pointer Release Tracking in `PS3Buttons.kt`:
+     - Identified root cause for shaped action buttons (△, □, ○, ✕) becoming stuck or delayed during game boot / gameplay: buttons were checking `event.changes.all { !it.pressed }` to determine release. When players held the left thumb on the analog stick or screen, `all { !it.pressed }` remained false, keeping buttons locked in the pressed state and ignoring all subsequent taps until every finger was removed.
+     - Updated `PressablePadButton`, `ShoulderButton`, and `SystemPillButton` to capture the specific touching pointer `val pointerId = down.id` and evaluate only `event.changes.firstOrNull { it.id == pointerId }`.
+     - Wrapped gesture detection in `try ... finally { isPressed = false; currentOnPressChanged(false) }` to guarantee reliable release upon finger lift or gesture cancellation.
+     - Added `val currentOnPressChanged by rememberUpdatedState(onPressChanged)` to eliminate stale closure bugs across Compose recompositions.
+  2. Button Throttling Bypass in `GamepadClient.kt`:
+     - Added button/dpad change tracking (`lastSentButtons`, `lastSentDpad`).
+     - Any transition in buttons or D-pad (`state.buttons != lastSentButtons || state.dpad != lastSentDpad`) now immediately transmits over WebSocket with 0ms latency, bypassing the 16ms motion rate-limiter.
+     - Prevents high-frequency analog stick touch sampling from buffering, delaying, or overwriting rapid button taps.
+  3. Real-Time RPCS3 Frontmost Detection in `RPCS3DirectInputAdapter.swift`:
+     - Evaluated `frontApp.localizedName` and `frontApp.bundleIdentifier` directly on event dispatch so that when a game window boots, keyboard events route to `.cghidEventTap` immediately without waiting for a periodic PID scan.
+     - Added native RPCS3 PS button mapping (Backspace `51` alongside Escape `53`).
+
+## D-020 — Cutscene Connectivity Preservation & Zero Stick-Drift Architecture
+- Status: Accepted
+- Decision:
+  1. Cutscene Idle Disconnect Prevention:
+     - Root Cause: During non-interactive cutscenes, no buttons or sticks are touched for extended periods (>8 seconds). Two compounding timeout bugs caused disconnections:
+       (a) Mac `ControllerServer.swift` had an idle timeout threshold of 8.0s (`Date().timeIntervalSince(last) > 8.0`), dropping the client if input was silent during cutscenes. Increased server idle timeout to 60.0s.
+       (b) Android OkHttp WebSocket was configured with `.pingInterval(5, TimeUnit.SECONDS)`. Because the macOS custom TCP socket handler does not reply with RFC 6455 Pong frames, OkHttp threw `java.net.SocketTimeoutException: sent ping but didn't receive pong within 5000ms`, dropping the socket every 10 seconds.
+       (c) Android OS power management put the Wi-Fi radio and CPU into doze/sleep mode during long cutscenes when no touch events occurred.
+     - Fix:
+       (a) Server idle timeout in `ControllerServer.swift` increased from 8.0s to 60.0s.
+       (b) Added WebSocket RFC 6455 Pong frame generation (`makeWebSocketPongFrame`) in `ControllerServer.swift` for any incoming Ping frames (opcode 0x9).
+       (c) Disabled OkHttp transport ping (`.pingInterval(0, TimeUnit.SECONDS)`) in `GamepadClient.kt`. The system relies on its dedicated application-level 1000ms JSON `HeartbeatMessage` (`startHeartbeat()`), which keeps `lastMessageDate = Date()` fresh indefinitely without brittle socket timeouts.
+       (d) Added `WifiLock` (`WIFI_MODE_FULL_LOW_LATENCY` / `HIGH_PERF`) and `WakeLock` (`PARTIAL_WAKE_LOCK`) in `MainActivity.kt` with Android permissions `WAKE_LOCK` and `ACCESS_WIFI_STATE`, keeping radio and CPU active even during cutscenes.
+  2. Stick Drift Immunity:
+     - Root Cause: Capacitive touchscreens exhibit subtle sub-pixel thermal/capacitive micro-jitter (typically 1-3%) when a finger rests near or releases the analog stick. Additionally, dropped UDP packets or rate-limited updates on release could leave the last non-zero coordinate active in RPCS3, causing endless character walking/drifting.
+     - Fix:
+       (a) Increased default deadzone from 0.05 (5%) to 0.15 (15%) in `MainActivity.kt` and `TouchInputMapper.kt`, snapping all displacements `< 0.015f` to absolute zero.
+       (b) Added stick centering detection (`stickReleasedToCenter = isZeroAxes && !wasZeroAxes`) in `GamepadClient.kt` to immediately bypass the 16ms rate-limiter and transmit `(0f, 0f)` with 0ms latency, followed by a redundant confirmation packet scheduled 30ms later.
+       (c) Implemented 350ms stick watchdog timer (`checkStickWatchdog`) running every 100ms in `RPCS3DirectInputAdapter.swift`. If stick input is silent for >350ms, any active stick keys (WASD, Right Stick keys) are auto-released, making stuck drift keys impossible under packet loss or cutscenes.
+- Reason: Guarantees continuous connection stability throughout long cinematic cutscenes and eliminates capacitive touch drift or stuck movement in RPCS3.

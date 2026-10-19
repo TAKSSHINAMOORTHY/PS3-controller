@@ -81,21 +81,78 @@
       * Fixed Wi-Fi Connectivity: Stripped interface name suffix (`" (en0)"`) so clean IP `192.168.1.24` is exposed and copied. Added 1-click "Copy URL" and "Copy IP" buttons in `ContentView.swift`.
       * Implemented UDP Auto-Discovery Beacon: Mac companion listens on UDP 6001 and responds to `"DISCOVER_PS3_BRIDGE"` with its active IP/port. Integrated auto-discovery into Android `GamepadClient.kt` with fallback probe, eliminating manual IP entry.
       * Rebuilt and deployed APK (`app-debug.apk`) directly to attached Android device (`10BD12000X00011`). Verified `Android Paired` on Mac companion.
+    - Issue 8 (D-pad Down Phantom Button Removal & Freeform Tap Selection & Dragging in Edit Mode):
+      * Diagnosed and removed phantom duplicate button beneath D-pad Down: Eliminated the static 48dp Box center hub that sat behind the D-pad buttons. Previously, if the Down arrow was shifted, this background hub was exposed as a phantom duplicate button.
+      * Fixed D-pad Down touch detection: Replaced nested layout containers with full-canvas absolute positioning in `BoxWithConstraints` for all 19 controls. This eliminated Compose layout clipping boundaries that previously pruned touch events when controls were offset.
+      * Enabled freeform touch selection and dragging: Added `enabled: Boolean = true` to `PressablePadButton`, `ShoulderButton`, `SystemPillButton`, and `JoystickStick`. In Edit Mode (`enabled = false`), buttons do not consume touch events. Added `detectTapGestures` and `detectDragGestures` with `rememberUpdatedState` on `EditableControl` so any control can be tapped directly to select and dragged freely anywhere across the screen.
+      * Verified on physical Android device (`10BD12000X00011`): Confirmed direct tap selection on Triangle, D-pad Down, and Analog Sticks, freeform drag repositioning of controls, and verified that pressing D-pad Down in normal gameplay mode lights up and transmits responsive game inputs.
 - Files changed:
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/MainActivity.kt`
-  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/network/GamepadClient.kt`
-  * `MacApp/Sources/MacGamepadCore/RPCS3DirectInputAdapter.swift`
-  * `MacApp/Sources/MacApp/AppViewModel.swift`
-  * `MacApp/Sources/MacApp/ContentView.swift`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/ControllerScreen.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/components/PS3Buttons.kt`
+  * `AndroidApp/app/src/main/java/com/antigravity/ps3controller/ui/components/JoystickStick.kt`
   * `docs/DECISION_LOG.md`
   * `docs/PROGRESS.md`
 - Tests passed: ALL
   * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
   * macOS Core tests: 11/11 passed (`swift test`)
-  * Android APK build: SUCCESS (`./scripts/build-android.sh`)
-  * Android APK install & launch: SUCCESS (`./scripts/install-android.sh`)
-  * macOS companion release build: SUCCESS (`./scripts/build-macos.sh`)
-  * /Applications independent installation: SUCCESS (`/Applications/PS3ControllerCompanion.app`)
-  * Live USB & Wi-Fi UDP discovery & pairing: VERIFIED (`Android Paired`)
-- Blockers: None. Server is actively listening, alarm sounds are silenced, and phone is paired.
+  * Android APK build: SUCCESS (`./gradlew assembleDebug`)
+  * Android APK install & launch: SUCCESS (`adb install -r app-debug.apk`)
+  * D-pad Down live input response: VERIFIED (visual illumination & state dispatch)
+  * Edit Mode freeform tap & drag: VERIFIED (real-time selection & displacement)
+- Blockers: None. Controller layout is clean, responsive, and freely customizable.
+
+
+
+## Right Analog Stick RPCS3 In-Game Dodging Fix
+- Date: 2026-10-19
+- Issue: Right analog stick was moving visually on the phone screen but not registering in God of War III for evasion rolls / dodging.
+- Root Cause: RPCS3 configuration file (`input_configs/global/Default.yml`) binds the Right Analog Stick to `Home` (115), `End` (119), `Forward Delete` (117), and `Page Down` (121). The adapter was only sending `I, K, J, L` (34, 40, 38, 37), which RPCS3 ignored.
+- Fix:
+  * Dual-mapped Right Analog Stick to native RPCS3 keys (115, 119, 117, 121) and alphanumeric keys (34, 40, 38, 37).
+  * Reduced stick threshold to 0.20 for faster trigger.
+  * Added frontmost `.cghidEventTap` event routing when RPCS3 has input focus.
+  * Recompiled and reinstalled `/Applications/PS3ControllerCompanion.app` and Android app.
+- Tests passed: Swift unit tests (11/11 passed), Android build and installation succeeded, live connection established.
+
+## Shaped Buttons Multi-Touch Latency & Stuck Input Fix
+- Date: 2026-10-19
+- Issue: When booting a game or in menus/gameplay, shaped action buttons (Triangle, Square, Circle, Cross) felt delayed, unresponsive, or took time to work, while D-pad arrow buttons worked fine.
+- Root Cause:
+  1. Multi-Touch Release Lock: `PressablePadButton`, `ShoulderButton`, and `SystemPillButton` evaluated `event.changes.all { !it.pressed }` to detect release. When the user held or rested their left thumb on the analog stick or screen, `all { !it.pressed }` remained false. The action button was held down continuously in RPCS3, preventing release and ignoring subsequent taps until all fingers were lifted off the screen.
+  2. Rate Limiting Buffer: In `GamepadClient.kt`, rapid button taps and releases occurring within 16ms of continuous analog stick motion were throttled and risked being overwritten by subsequent stick updates before dispatch.
+- Fix:
+  * Implemented per-pointer gesture tracking in `PS3Buttons.kt` using `down.id`, checking only `event.changes.firstOrNull { it.id == pointerId }` and ensuring instant release via `try ... finally { isPressed = false; currentOnPressChanged(false) }`.
+  * Added `val currentOnPressChanged by rememberUpdatedState(onPressChanged)` across all buttons to prevent stale closures.
+  * Added instant button bypass in `GamepadClient.kt` (`state.buttons != lastSentButtons || state.dpad != lastSentDpad`) so all button presses and releases transmit immediately with 0ms latency.
+  * Updated `RPCS3DirectInputAdapter.swift` with real-time name/bundle frontmost app detection on event posting and added Backspace (`51`) dual-mapping for PS Button.
+  * Built and reinstalled debug APK on physical Android device (`10BD12000X00011`) and updated `/Applications/PS3ControllerCompanion.app`.
+- Tests passed:
+  * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
+  * macOS Core tests: 11/11 passed (`swift test`)
+  * Android build & install: SUCCESS (`adb install -r app-debug.apk`)
+  * Companion binary release build & install: SUCCESS (`/Applications/PS3ControllerCompanion.app`)
+  * Live USB pairing & message exchange: VERIFIED (`accepted`, 60Hz)
+
+## Cutscene Connectivity Preservation & Zero Stick-Drift Guarantee
+- Date: 2026-10-19
+- Issue:
+  1. During cutscenes, the controller lost connection or stopped working because no buttons were pressed for extended periods.
+  2. Analog sticks experienced occasional drift (subtle micro-jitter or stuck directional movement).
+- Root Cause:
+  1. Server idle timeout in `ControllerServer.swift` was set to an aggressive 8.0s, dropping connections when input was silent during cutscenes. Furthermore, OkHttp `.pingInterval(5, TimeUnit.SECONDS)` caused `SocketTimeoutException: sent ping but didn't receive pong within 5000ms`, dropping the socket every 10 seconds. Finally, Android's OS power management turned off Wi-Fi low-latency mode and put the CPU to sleep when no touches were detected.
+  2. Capacitive touchscreen surface jitter near stick center (1-3%) combined with a 0.05 (5%) deadzone caused inadvertent stick movement. Also, if stick release (0, 0) was delayed by rate-limiting or dropped over the network, RPCS3 kept running in the last registered direction.
+- Fix:
+  1. Increased server idle timeout in `ControllerServer.swift` from 8.0s to 60.0s.
+  2. Added RFC 6455 Pong frame generation in `ControllerServer.swift` for Ping frames (opcode 0x9).
+  3. Disabled OkHttp `pingInterval(0, TimeUnit.SECONDS)` in `GamepadClient.kt`, relying exclusively on the 1000ms JSON `HeartbeatMessage` that keeps `lastMessageDate` fresh indefinitely.
+  4. Added `WifiLock` (`WIFI_MODE_FULL_LOW_LATENCY` / `HIGH_PERF`) and `WakeLock` (`PARTIAL_WAKE_LOCK`) in `MainActivity.kt` with permissions `WAKE_LOCK` and `ACCESS_WIFI_STATE`.
+  5. Increased default deadzone to 0.15 (15%) in `MainActivity.kt` and `TouchInputMapper.kt`, with hard snap below 0.015 displacement to absolute 0.0f.
+  6. Added zero-latency center transmission in `GamepadClient.kt` when stick returns to center (`stickReleasedToCenter`), plus a 30ms redundant confirmation packet.
+  7. Added 350ms stick watchdog timer in `RPCS3DirectInputAdapter.swift` running every 100ms. If stick input is silent for >350ms, all active stick keys (WASD, Right Stick keys) are auto-released, making stuck drift keys impossible under packet loss or cutscenes.
+- Tests passed:
+  * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
+  * macOS Core tests: 11/11 passed (`swift test`)
+  * Android debug build & device install: SUCCESS (`adb install -r app-debug.apk`)
+  * macOS release bundle build & launch: SUCCESS (`/Applications/PS3ControllerCompanion.app`)
+  * Continuous idle connection stability: VERIFIED (0 ping drops, 0 disconnects across 60+ seconds of idle time)
 

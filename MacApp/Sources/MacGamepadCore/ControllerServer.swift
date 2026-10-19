@@ -142,7 +142,7 @@ public final class ControllerServer: @unchecked Sendable {
         }
 
         // Parse WebSocket frames or raw JSON
-        let payloads = extractAllWebSocketPayloads(data)
+        let payloads = extractAllWebSocketPayloads(data, on: connection)
 
         for payloadData in payloads {
             do {
@@ -248,7 +248,7 @@ public final class ControllerServer: @unchecked Sendable {
         connection.send(content: frame, completion: .contentProcessed({ _ in }))
     }
 
-    private func extractAllWebSocketPayloads(_ data: Data) -> [Data] {
+    private func extractAllWebSocketPayloads(_ data: Data, on connection: NWConnection) -> [Data] {
         var results: [Data] = []
         var offset = 0
         let count = data.count
@@ -289,6 +289,27 @@ public final class ControllerServer: @unchecked Sendable {
                 }
             } else if opcode == 0x8 { // Connection close frame
                 break
+            } else if opcode == 0x9 { // Ping frame
+                // Respond immediately with Pong frame (opcode 0xA) to keep socket alive
+                let maskOffset = offset + headerSize
+                let payloadOffset = isMasked ? (maskOffset + 4) : maskOffset
+                var pongPayload = Data()
+                if payloadLen > 0 && payloadOffset + payloadLen <= count {
+                    if isMasked {
+                        let mask = [data[maskOffset], data[maskOffset + 1], data[maskOffset + 2], data[maskOffset + 3]]
+                        var unmasked = Data(count: payloadLen)
+                        for i in 0..<payloadLen {
+                            unmasked[i] = data[payloadOffset + i] ^ mask[i % 4]
+                        }
+                        pongPayload = unmasked
+                    } else {
+                        pongPayload = data.subdata(in: payloadOffset..<(payloadOffset + payloadLen))
+                    }
+                }
+                let pongFrame = makeWebSocketPongFrame(pongPayload)
+                connection.send(content: pongFrame, completion: .contentProcessed({ _ in }))
+            } else if opcode == 0xA { // Pong frame
+                // Client Pong received, keeps connection active
             }
 
             offset += totalFrameSize
@@ -314,6 +335,20 @@ public final class ControllerServer: @unchecked Sendable {
         return frame
     }
 
+    private func makeWebSocketPongFrame(_ payload: Data) -> Data {
+        var frame = Data()
+        frame.append(0x8A) // Pong frame (opcode 0xA), FIN=1
+        if payload.count < 126 {
+            frame.append(UInt8(payload.count))
+        } else {
+            frame.append(126)
+            frame.append(UInt8((payload.count >> 8) & 0xFF))
+            frame.append(UInt8(payload.count & 0xFF))
+        }
+        frame.append(payload)
+        return frame
+    }
+
     private func startTimeoutMonitor() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 2.0, repeating: 1.0)
@@ -322,8 +357,8 @@ public final class ControllerServer: @unchecked Sendable {
             let (conn, hasSession, last) = self.lock.withLock {
                 (self.activeConnection, self.activeSessionId != nil, self.lastMessageDate)
             }
-            if let conn = conn, hasSession && Date().timeIntervalSince(last) > 8.0 {
-                self.handleClientDisconnect(connection: conn, reason: "Session timed out (> 8000ms idle)")
+            if let conn = conn, hasSession && Date().timeIntervalSince(last) > 60.0 {
+                self.handleClientDisconnect(connection: conn, reason: "Session timed out (> 60s idle)")
             }
         }
         self.timeoutTimer = timer

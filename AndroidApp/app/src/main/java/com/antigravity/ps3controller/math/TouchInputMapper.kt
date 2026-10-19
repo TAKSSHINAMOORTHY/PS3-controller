@@ -26,7 +26,7 @@ object TouchInputMapper {
         dx: Float,
         dy: Float,
         maxRadius: Float,
-        deadZone: Float = 0.05f,
+        deadZone: Float = 0.15f,
         sensitivity: Float = 1.0f
     ): StickResult {
         if (maxRadius <= 0f) return StickResult(0f, 0f)
@@ -44,6 +44,8 @@ object TouchInputMapper {
 
         // Rescale range (effectiveDeadZone..1.0] -> (0.0..1.0]
         val adjustedDist = ((normalizedDist - effectiveDeadZone) / (1.0f - effectiveDeadZone)).coerceIn(0.0f, 1.0f)
+        if (adjustedDist <= 0.001f) return StickResult(0f, 0f)
+
         val effectiveSens = if (sensitivity <= 0f) 1.0f else sensitivity
         val curvedDist = if (effectiveSens == 1.0f) adjustedDist else adjustedDist.pow(effectiveSens)
 
@@ -51,8 +53,11 @@ object TouchInputMapper {
         val unitX = dx / rawDist
         val unitY = dy / rawDist
 
-        val mappedX = (unitX * curvedDist).coerceIn(-1.0f, 1.0f)
-        val mappedY = (unitY * curvedDist).coerceIn(-1.0f, 1.0f)
+        val rawX = unitX * curvedDist
+        val rawY = unitY * curvedDist
+
+        val mappedX = if (kotlin.math.abs(rawX) < 0.015f) 0f else rawX.coerceIn(-1.0f, 1.0f)
+        val mappedY = if (kotlin.math.abs(rawY) < 0.015f) 0f else rawY.coerceIn(-1.0f, 1.0f)
 
         return StickResult(mappedX, mappedY)
     }

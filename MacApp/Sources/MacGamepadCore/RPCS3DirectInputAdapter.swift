@@ -28,10 +28,21 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
         self.eventSource = CGEventSource(stateID: .hidSystemState)
     }
 
+    private var lastStickActivity: Date = .distantPast
+    private var stickWatchdogTimer: DispatchSourceTimer?
+    private let watchdogQueue = DispatchQueue(label: "com.antigravity.stickwatchdog", qos: .userInteractive)
+
+    private let stickKeys: Set<CGKeyCode> = [
+        13, 1, 0, 2,        // Left Stick (W, S, A, D)
+        115, 119, 117, 121, // Right Stick Default.yml (Home, End, Delete, PageDown)
+        34, 40, 38, 37      // Right Stick Alphanumeric (I, K, J, L)
+    ]
+
     public func connect() async throws {
         lock.withLock {
             isConnected = true
             refreshRPCS3Pids()
+            startStickWatchdog()
         }
         if !Self.isAccessibilityPermissionGranted {
             print("[RPCS3Adapter] ⚠️ WARNING: Accessibility permission is NOT granted. CGEvent taps require Accessibility in System Settings > Privacy & Security > Accessibility.")
@@ -41,6 +52,7 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
     }
 
     public func disconnect() async {
+        stopStickWatchdog()
         await releaseAll()
         lock.withLock {
             isConnected = false
@@ -60,6 +72,13 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
     public func updateState(_ state: ControllerState) async throws {
         lock.withLock {
             refreshRPCS3PidsIfNeeded()
+
+            let isStickActive = abs(state.axes.lx) > 0.15 || abs(state.axes.ly) > 0.15 ||
+                                abs(state.axes.rx) > 0.15 || abs(state.axes.ry) > 0.15
+            if isStickActive {
+                lastStickActivity = Date()
+            }
+
             let desired = calculateDesiredKeys(for: state)
 
             let toPress = desired.subtracting(activeKeys)
@@ -73,6 +92,38 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
             }
 
             activeKeys = desired
+        }
+    }
+
+    private func startStickWatchdog() {
+        stopStickWatchdog()
+        let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
+        timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
+        timer.setEventHandler { [weak self] in
+            self?.checkStickWatchdog()
+        }
+        self.stickWatchdogTimer = timer
+        timer.resume()
+    }
+
+    private func stopStickWatchdog() {
+        stickWatchdogTimer?.cancel()
+        stickWatchdogTimer = nil
+    }
+
+    private func checkStickWatchdog() {
+        lock.withLock {
+            let now = Date()
+            // If stick has been silent / inactive for > 350ms, auto-center and release any stuck stick keys
+            if now.timeIntervalSince(lastStickActivity) > 0.35 {
+                let stuckStickKeys = activeKeys.intersection(stickKeys)
+                if !stuckStickKeys.isEmpty {
+                    for key in stuckStickKeys {
+                        postRawKeyEvent(code: key, down: false)
+                        activeKeys.remove(key)
+                    }
+                }
+            }
         }
     }
 
@@ -107,9 +158,10 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
         if state.buttons.start { keys.insert(36) }
         // Select: Space (49)
         if state.buttons.select { keys.insert(49) }
-        // PS Button: Escape (53)
+        // PS Button: Escape (53) & Backspace (51)
         if state.buttons.ps {
-            keys.insert(53) // Escape (Safe, non-destructive)
+            keys.insert(53) // Escape
+            keys.insert(51) // Backspace (RPCS3 default: ⌫)
         }
 
         // D-Pad (Default: Arrow keys)
@@ -119,25 +171,30 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
         if state.dpad.right { keys.insert(124) } // Right Arrow
 
         // Left Analog Stick -> WASD
-        let stickThreshold: Float = 0.25
+        let stickThreshold: Float = 0.20
         if state.axes.ly < -stickThreshold { keys.insert(13) } // W (Up)
         if state.axes.ly > stickThreshold { keys.insert(1) }   // S (Down)
         if state.axes.lx < -stickThreshold { keys.insert(0) }   // A (Left)
         if state.axes.lx > stickThreshold { keys.insert(2) }   // D (Right)
 
-        // Right Analog Stick -> Clean alphanumeric I, K, J, L (34, 40, 38, 37)
-        // Does not send destructive Forward Delete (117) or Home (115) which trigger macOS system alert sounds
+        // Right Analog Stick -> Dual-mapped to RPCS3 Default.yml (Home: 115, End: 119, Forward Delete: 117, Page Down: 121)
+        // AND clean alphanumeric keys (I: 34, K: 40, J: 38, L: 37).
+        // This enables in-game dodging/evasion in God of War III while preserving alphanumeric compatibility.
         if state.axes.ry < -stickThreshold {
-            keys.insert(34)  // I (Up)
+            keys.insert(115) // Home (RPCS3 native Default Right Stick Up: ↖)
+            keys.insert(34)  // I
         }
         if state.axes.ry > stickThreshold {
-            keys.insert(40)  // K (Down)
+            keys.insert(119) // End (RPCS3 native Default Right Stick Down: ↘)
+            keys.insert(40)  // K
         }
         if state.axes.rx < -stickThreshold {
-            keys.insert(38)  // J (Left)
+            keys.insert(117) // Forward Delete (RPCS3 native Default Right Stick Left: ⌦)
+            keys.insert(38)  // J
         }
         if state.axes.rx > stickThreshold {
-            keys.insert(37)  // L (Right)
+            keys.insert(121) // Page Down (RPCS3 native Default Right Stick Right: ⇟)
+            keys.insert(37)  // L
         }
 
         return keys
@@ -166,15 +223,20 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
     private func postRawKeyEvent(code: CGKeyCode, down: Bool) {
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: code, keyDown: down) else { return }
 
-        // If RPCS3 is running, route exclusively to its process PID.
-        // This isolates all gamepad keystrokes to RPCS3 and guarantees zero alert beeps on macOS.
-        if !cachedPids.isEmpty {
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        let isFrontNameRPCS3 = frontApp?.localizedName?.lowercased().contains("rpcs3") == true ||
+                               frontApp?.bundleIdentifier?.lowercased().contains("rpcs3") == true
+        let isRPCS3Front = isFrontNameRPCS3 || cachedPids.contains(frontApp?.processIdentifier ?? 0)
+
+        // If RPCS3 is the active focused window, post directly to the system HID event tap
+        // so Qt / Vulkan / MoltenVK game window receives physical-grade keyboard events immediately.
+        if isRPCS3Front {
+            event.post(tap: .cghidEventTap)
+        } else if !cachedPids.isEmpty {
             for pid in cachedPids {
                 event.postToPid(pid)
             }
         } else {
-            // If RPCS3 is not yet open, post to HID event tap only if the frontmost app is not this companion
-            let frontApp = NSWorkspace.shared.frontmostApplication
             let myBundleId = Bundle.main.bundleIdentifier ?? "com.antigravity.ps3companion"
             if frontApp?.bundleIdentifier != myBundleId {
                 event.post(tap: .cghidEventTap)
