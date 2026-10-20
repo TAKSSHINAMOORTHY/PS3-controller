@@ -11,9 +11,9 @@ An open-source, local-first Android touchscreen controller (Kotlin + Jetpack Com
 3. [Architecture & Input Flow](#architecture--input-flow)
 4. [Technology Stack](#technology-stack)
 5. [Prerequisites & System Requirements](#prerequisites--system-requirements)
-6. [Quick Start with Setup Scripts](#quick-start-with-setup-scripts)
-7. [Android Installation (ADB over USB)](#android-installation-adb-over-usb)
-8. [macOS Companion Installation](#macos-companion-installation)
+6. [⚡ 1-Command Quick Start (Mac & Android)](#-1-command-quick-start-mac--android)
+7. [Android Setup & USB Authorization](#android-setup--usb-authorization)
+8. [macOS Companion Setup & Permissions](#macos-companion-setup--permissions)
 9. [RPCS3 Controller Configuration](#rpcs3-controller-configuration)
 10. [Controller Layout Customization](#controller-layout-customization)
 11. [Connection Transports (USB vs. Wi-Fi)](#connection-transports-usb-vs-wi-fi)
@@ -112,40 +112,91 @@ flowchart LR
 
 ## Prerequisites & System Requirements
 
-### Android Device
-- Android 8.0 (API level 26) or higher.
-- Developer Options & USB Debugging enabled (for USB mode).
-- Data-capable USB cable (must support data transfer, not charge-only).
+Before running the single-command setup scripts, ensure your system meets the following requirements:
 
-### Mac Computer
-- macOS 14.0 or higher (Apple Silicon M1/M2/M3/M4/M5 recommended).
-- Xcode Command Line Tools (`xcode-select --install`).
-- Android Debug Bridge (`brew install android-platform-tools`).
-- Java Development Kit 17+ (e.g. `brew install openjdk@17`).
-
----
-
-## Quick Start with Setup Scripts
-
-Automated scripts are located in the `scripts/` directory:
-
+### 1. Mac Prerequisites (Run Once)
+Install Xcode command line tools and essential packages via [Homebrew](https://brew.sh):
 ```bash
-# 1. Build and package the macOS Companion
-./scripts/build-macos.sh
+# 1. Install Xcode Command Line Tools (provides Swift compiler):
+xcode-select --install
 
-# 2. Install the macOS Companion to /Applications
-./scripts/install-macos.sh
-
-# 3. Build the Android APK
-./scripts/build-android.sh
-
-# 4. Install APK to connected phone and launch
-./scripts/install-android.sh
+# 2. Install ADB and Java JDK (for Android APK installation):
+brew install android-platform-tools openjdk@17
 ```
 
+| Requirement | Supported Version | Purpose |
+|---|---|---|
+| **macOS** | macOS 14.0+ (Sonoma, Sequoia, macOS 27) | Host companion daemon & WindowServer HID event tap |
+| **Architecture** | Apple Silicon (M1/M2/M3/M4/M5) or Intel | Optimized native ARM64 & x86_64 binaries |
+| **Swift Toolchain** | Swift 5.9+ / Swift 6.0 | Compiles `MacApp` release binary |
+| **ADB** | Android Platform Tools (`brew`) | Manages device discovery & USB reverse tunneling |
+| **Java JDK** | OpenJDK 17+ | Compiles Android Gradle project |
+
+### 2. Android Device Prerequisites
+| Requirement | Specification | Action Needed |
+|---|---|---|
+| **OS Version** | Android 8.0 (API 26) or higher | Compatible with modern Android 14/15/16 |
+| **USB Cable** | Data-capable USB-C / Micro-USB cable | **Must support data transfer** (not a charge-only cable) |
+| **Developer Options** | Enabled | Go to **Settings > About Phone** -> Tap **Build Number 7 times** |
+| **USB Debugging** | Enabled | Go to **Settings > Developer Options** -> Enable **USB Debugging** |
+| **RSA Authorization** | Accepted | Tap **Always allow from this computer** when prompted |
+
 ---
 
-## Android Installation (ADB over USB)
+## ⚡ 1-Command Quick Start (Mac & Android)
+
+Clone this repository and run the single setup command for each device:
+
+```bash
+git clone https://github.com/TAKSSHINAMOORTHY/PS3-controller.git
+cd PS3-controller
+```
+
+### 🍏 Step 1: Install & Setup Mac Companion (1 Command)
+```bash
+./setup-mac.sh
+```
+*(Or run `make mac`)*
+
+**What this single command executes automatically:**
+1. Compiles the native release binary via Swift Package Manager (`swift build -c release`).
+2. Packages the standalone application bundle with icon and Info.plist into `/Applications/PS3ControllerCompanion.app`.
+3. Ad-hoc codesigns with the stable identifier requirement (`com.antigravity.ps3companion`) to preserve macOS TCC permissions across builds.
+4. Verifies Accessibility permission status—if not yet granted, it automatically opens **System Settings > Privacy & Security > Accessibility** so you can toggle it ON with 1 click.
+5. Launches the graphical Companion dashboard.
+
+---
+
+### 🤖 Step 2: Install & Setup Android Controller (1 Command)
+Connect your Android phone to your Mac via USB data cable, then run:
+
+```bash
+./setup-android.sh
+```
+*(Or run `make android`)*
+
+**What this single command executes automatically:**
+1. Verifies that `adb` and `java` are present in your PATH.
+2. Checks for your connected Android phone (includes an automated wait loop if you are plugging in the cable).
+3. Automatically builds the Android APK (`app-debug.apk`) via Gradle if missing or if source files were modified.
+4. Sets up zero-latency USB reverse port forwarding (`adb reverse tcp:6000 tcp:6000`).
+5. Installs the APK onto your phone (`adb install -r ...`).
+6. Automatically launches the PS3 Controller app on your phone's screen.
+
+---
+
+### 🎮 Step 3: Configure RPCS3 (One-Time Setup)
+1. Open **RPCS3**.
+2. Click **Pads** in the top toolbar (or **Configuration > Pads**).
+3. Ensure **Player 1** tab is selected:
+   - **Handler**: `Keyboard`
+   - **Device**: `Keyboard`
+4. Launch your game (e.g., *God of War III*).
+5. **Click inside the RPCS3 Vulkan game window once** to focus input. Start playing!
+
+---
+
+## Android Setup & USB Authorization
 
 ### 1. Enable Developer Options on Android
 1. Open **Settings** on your phone.
@@ -170,8 +221,13 @@ List of devices attached
 ```
 *(If it shows `unauthorized`, unlock your phone and accept the RSA prompt. If empty, try another USB cable/port).*
 
-### 4. Build & Install the APK
-From the project root:
+### 4. 1-Command Automated Deploy
+```bash
+./setup-android.sh
+```
+
+### 5. Manual Build & Install (Alternative)
+If you prefer running the build and install steps separately:
 ```bash
 # Configure zero-latency USB port forwarding
 adb reverse tcp:6000 tcp:6000
@@ -190,27 +246,32 @@ adb shell am start -n com.antigravity.ps3controller/.MainActivity
 
 ---
 
-## macOS Companion Installation
+## macOS Companion Setup & Permissions
 
-### 1. Build the Release Binary & Application Bundle
+### 1. 1-Command Automated Deploy
 ```bash
-# Build release binary and bundle into MacApp/build/PS3ControllerCompanion.app
-./scripts/build-macos.sh
+./setup-mac.sh
 ```
+This builds, bundles, codesigns, checks Accessibility permissions, and launches the Companion app.
 
-### 2. Install to Applications
+### 2. Manual Build & Install (Alternative)
+If you prefer running each step individually:
 ```bash
+# Build release binary and package application bundle:
+./scripts/build-macos.sh
+
+# Install application bundle into /Applications:
 ./scripts/install-macos.sh
 ```
-This installs `PS3ControllerCompanion.app` into `/Applications` (or `~/Applications` if permissions are restricted).
 
 ### 3. Grant Accessibility Permissions
 macOS requires Accessibility permissions for synthetic input injection:
 1. Open **System Settings > Privacy & Security > Accessibility**.
 2. Click **+** and add **PS3 Controller Companion** (or ensure your **Terminal** app is checked if running in CLI mode).
 3. Toggle the permission to **ON**.
+*(Note: `./setup-mac.sh` automatically opens this settings window for you if permissions are pending).*
 
-### 4. Launch the Companion
+### 4. Companion Modes
 You can launch either the graphical app or the headless daemon:
 ```bash
 # Graphical Dashboard:
@@ -349,6 +410,9 @@ Tests cover:
 
 ```text
 .
+├── setup-mac.sh                      # 🍏 1-Command setup for Mac Companion
+├── setup-android.sh                  # 🤖 1-Command setup for Android Controller
+├── Makefile                          # Convenience targets: make mac, make android, make test
 ├── AndroidApp/                       # Android application (Kotlin + Compose)
 │   ├── app/
 │   │   ├── src/main/java/com/antigravity/ps3controller/
@@ -371,7 +435,7 @@ Tests cover:
 │   ├── COMPATIBILITY_MATRIX.md
 │   ├── DECISION_LOG.md
 │   └── PROGRESS.md
-├── scripts/                          # One-command build & install scripts
+├── scripts/                          # Automated build & install scripts
 │   ├── build-android.sh
 │   ├── install-android.sh
 │   ├── build-macos.sh

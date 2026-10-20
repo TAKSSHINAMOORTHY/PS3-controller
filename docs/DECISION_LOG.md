@@ -238,3 +238,19 @@
        (c) Reduced stick motion dispatch throttling from 16ms to 8ms (~120Hz) in `GamepadClient.kt`.
        (d) Replaced unbounded Task chaining in `ControllerServer.swift` with a high-priority `AsyncStream<ControllerState>` for sub-millisecond dispatch.
 - Reason: Guarantees genuine analog joystick sensitivity in all 360 degrees, solves button mashing responsiveness, and ensures all shoulder and face button holds work properly.
+
+## D-025 — 1-Command Root Setup Scripts & Precision GitHub Instructions
+- Status: Accepted
+- Decision:
+  1. Root-Level 1-Command Runners:
+     - Created root-level `./setup-mac.sh` and `./setup-android.sh` executable convenience scripts wrapping `./scripts/install-macos.sh` and `./scripts/install-android.sh`.
+     - Provided standard root `Makefile` exposing `make mac`, `make android`, `make test`, and `make help`.
+  2. Smart macOS Setup Automation:
+     - Enhanced `install-macos.sh` to check for Swift toolchain, automatically rebuild the release bundle if source files changed or bundle is missing, install to `/Applications/PS3ControllerCompanion.app`, codesign with stable bundle designated requirement, check macOS Accessibility status, automatically open System Settings > Privacy & Security > Accessibility if permissions are needed, and auto-launch the Companion app.
+  3. Smart Android Setup Automation:
+     - Enhanced `install-android.sh` to check ADB and Java prerequisites, provide an automated 20-second connection wait loop with real-time feedback (detecting USB connection and guiding users through developer options / RSA authorization if missing or unauthorized), automatically rebuild the APK if sources modified, set up reverse port forwarding (`adb reverse tcp:6000 tcp:6000`), install APK, and auto-launch MainActivity on the phone.
+  4. GitHub README Standardization:
+     - Restructured `README.md` to feature a prominent `⚡ 1-Command Quick Start (Mac & Android)` section right at the top.
+     - Documented exact system requirements with a single-line copy-paste Homebrew command (`brew install android-platform-tools openjdk@17 && xcode-select --install`).
+     - Clarified RPCS3 setup with 3 simple steps (Handler: Keyboard, Device: Keyboard, click game window).
+- Reason: Satisfies requirement for precise, frictionless 1-command installation for both Mac and Android directly from the GitHub repository root.

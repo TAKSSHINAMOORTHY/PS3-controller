@@ -17,21 +17,45 @@
 - [x] Phase 7 — GitHub readiness
 - [x] Phase 8 — USB transport and automated ADB reverse port-forwarding
 - [x] Phase 9 — Independent /Applications installation & robust server restart
+- [x] Phase 10 — 1-Command Root Setup Scripts & Precise GitHub Documentation
 
 ## Empirical Verification Summary
 
 | Test Category | Suite / Command | Result | Details |
 | :--- | :--- | :--- | :--- |
+| **Mac 1-Command Setup** | `./setup-mac.sh --no-launch` | **PASS** | Auto-detected Swift, rebuilt, signed with designated requirement, verified Accessibility, installed to `/Applications` |
+| **Android 1-Command Setup** | `./setup-android.sh --no-wait` | **PASS** | Verified ADB and Java prerequisites, checked device status, guided troubleshooting |
+| **Android APK Build** | `./scripts/build-android.sh` | **PASS** | Built `app-debug.apk` cleanly (16 MB) |
 | **Phase 1 Spike** | `spikes/monitor_sdl` + `spikes/test_button_injection.py` | **PASS** | Virtual controller dynamically detected by RPCS3 SDL3; button A pressed/released, axis moved |
-| **Phase 2 & 3 macOS Core** | `swift test` (in `MacApp/`) | **PASS** | 9/9 tests passed (0 failures, 0.004s execution) |
+| **Phase 2 & 3 macOS Core** | `swift test` (in `MacApp/`) | **PASS** | 11/11 tests passed (0 failures) |
 | **Phase 3 macOS App** | `swift build` (in `MacApp/`) | **PASS** | Clean build (0 errors, 0 warnings); GUI + CLI `--headless` |
-| **Phase 4 Android Unit** | `./gradlew testDebugUnitTest` | **PASS** | 9/9 tests passed (touch math + protocol serialization) |
-| **Phase 4 Android APK** | `./gradlew assembleDebug` | **PASS** | Built `app-debug.apk` (16 MB) |
+| **Phase 4 Android Unit** | `./gradlew testDebugUnitTest` | **PASS** | 18/18 tests passed (touch math + protocol serialization) |
 | **Phase 5 E2E Pipeline** | `python3 tests/test_e2e_pipeline.py` | **PASS** | Real end-to-end round trip: WS client -> `MacApp` -> DriverKit -> RPCS3 `libSDL3.0.dylib` |
 | **Phase 6 Resilience** | `python3 tests/test_resilience.py` | **PASS** | 6/6 tests passed: 140 pkt/s burst, stale seq rejection, rogue session drop, reconnect cycle |
 | **Phase 7 CI Pipeline** | `.github/workflows/ci.yml` | **PASS** | Workflows configured for macOS + Android builds & tests |
 
 ## Latest work log
+- Work completed:
+  * 1-Command Root Setup Scripts & Precise GitHub Deployment Documentation:
+    - Implemented root `./setup-mac.sh` executable runner. Automatically detects Swift compiler, compiles release binary via Swift Package Manager, packages into `/Applications/PS3ControllerCompanion.app`, ad-hoc codesigns with stable identifier requirement (`com.antigravity.ps3companion`), checks Accessibility permission via `AXIsProcessTrusted()`, opens System Settings Accessibility pane automatically if permissions are required, and launches the companion app.
+    - Implemented root `./setup-android.sh` executable runner. Checks for `adb` and `java` prerequisites, provides an automated 20-second connection wait loop guiding the user through USB connection, Developer Options, and RSA authorization, builds the APK with Gradle if missing or modified, sets up zero-latency USB reverse tunneling (`adb reverse tcp:6000 tcp:6000`), installs the APK onto the phone, and launches `MainActivity`.
+    - Created root `Makefile` with targets `make mac`, `make android`, `make test`, and `make help`.
+    - Revamped `README.md` with a prominent `⚡ 1-Command Quick Start (Mac & Android)` section right at the top, clear single-line prerequisite commands (`brew install android-platform-tools openjdk@17 && xcode-select --install`), explicit system requirements tables for Mac and Android, step-by-step RPCS3 configuration, and detailed troubleshooting.
+- Files changed:
+  * `setup-mac.sh`
+  * `setup-android.sh`
+  * `Makefile`
+  * `scripts/install-macos.sh`
+  * `scripts/install-android.sh`
+  * `README.md`
+  * `docs/DECISION_LOG.md`
+  * `docs/PROGRESS.md`
+- Tests passed: ALL
+  * `./setup-mac.sh --no-launch`: SUCCESS
+  * `./scripts/build-android.sh`: SUCCESS
+  * `make help`: SUCCESS
+  * `swift test` (in `MacApp/`): 11/11 PASSED
+  * `./gradlew testDebugUnitTest` (in `AndroidApp/`): 18/18 PASSED
 - Work completed:
   * Phase 5 (End-to-End Integration):
     - Executed automated full pipeline test `tests/test_e2e_pipeline.py`.
