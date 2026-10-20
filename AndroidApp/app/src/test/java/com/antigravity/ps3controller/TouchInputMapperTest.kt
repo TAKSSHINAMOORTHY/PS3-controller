@@ -70,11 +70,10 @@ class TouchInputMapperTest {
             maxRadius = 100f,
             deadZone = 0.0f
         )
-        // Since magnitude exceeds maxRadius, length must be 1.0f and x == y
-        val mag = hypot(result.x, result.y)
-        assertEquals(1.0f, mag, 0.001f)
+        // Real joystick corner behavior: full deflection reaches 1.0f on both axes simultaneously
+        assertEquals(1.0f, result.x, 0.001f)
+        assertEquals(1.0f, result.y, 0.001f)
         assertEquals(result.x, result.y, 0.001f)
-        assertTrue(result.x > 0.70f)
     }
 
     @Test

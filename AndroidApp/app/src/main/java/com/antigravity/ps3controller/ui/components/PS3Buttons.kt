@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -76,6 +77,7 @@ fun PressablePadButton(
                         if (change == null || !change.pressed) {
                             break
                         }
+                        change.consume()
                     }
                 } finally {
                     isPressed = false
@@ -88,6 +90,7 @@ fun PressablePadButton(
     Box(
         modifier = modifier
             .size(effectiveSize)
+            .systemGestureExclusion()
             .shadow(if (isPressed && enabled) 2.dp else 4.dp, shape)
             .clip(shape)
             .background(bgColor)
@@ -295,6 +298,7 @@ fun ShoulderButton(
                         if (change == null || !change.pressed) {
                             break
                         }
+                        change.consume()
                     }
                 } finally {
                     isPressed = false
@@ -308,6 +312,7 @@ fun ShoulderButton(
         modifier = modifier
             .width(effectiveWidth)
             .height(effectiveHeight)
+            .systemGestureExclusion()
             .clip(shape)
             .background(if (isPressed && enabled) activeColor.copy(alpha = (0.9f * sensitivity.coerceIn(0.5f, 1.2f)).coerceIn(0.5f, 1.0f)) else Color(0xFF282D36))
             .border((1.5 * scale).dp.coerceAtLeast(1.dp), Color(0xFF475060), shape)
@@ -358,6 +363,7 @@ fun SystemPillButton(
                         if (change == null || !change.pressed) {
                             break
                         }
+                        change.consume()
                     }
                 } finally {
                     isPressed = false
@@ -370,6 +376,7 @@ fun SystemPillButton(
     Box(
         modifier = modifier
             .size(width = effectiveWidth, height = effectiveHeight)
+            .systemGestureExclusion()
             .clip(shape)
             .background(
                 if (isPressed && enabled) {

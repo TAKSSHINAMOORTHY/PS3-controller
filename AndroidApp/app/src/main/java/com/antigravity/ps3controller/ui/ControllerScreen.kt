@@ -97,35 +97,7 @@ fun ControllerScreen(
     val activeHost by client.activeHost.collectAsState()
     val errorMessage by client.errorMessage.collectAsState()
 
-    var buttons by remember { mutableStateOf(ControllerButtons()) }
-    var dpad by remember { mutableStateOf(ControllerDPad()) }
-    var axes by remember { mutableStateOf(ControllerAxes()) }
-    var triggers by remember { mutableStateOf(ControllerTriggers()) }
-
     var selectedControl by remember { mutableStateOf(ControlId.CROSS) }
-
-    fun updateAndSend(
-        newButtons: ControllerButtons = buttons,
-        newDpad: ControllerDPad = dpad,
-        newAxes: ControllerAxes = axes,
-        newTriggers: ControllerTriggers = triggers
-    ) {
-        if (isEditMode) return // In edit mode, layout interactions never fire inputs
-        buttons = newButtons
-        dpad = newDpad
-        axes = newAxes
-        triggers = newTriggers
-
-        val state = ControllerState(
-            sessionId = "",
-            seq = 0,
-            buttons = newButtons,
-            dpad = newDpad,
-            axes = newAxes,
-            triggers = newTriggers
-        )
-        client.sendState(state)
-    }
 
     fun onDragControl(id: ControlId, dx: Float, dy: Float) {
         val current = layoutConfig.getControl(id)
@@ -204,10 +176,7 @@ fun ControllerScreen(
                         enabled = !isEditMode,
                         onPressChanged = { isPressed ->
                             val trigVal = TouchInputMapper.mapTrigger(if (isPressed) 1f else 0f, effSens)
-                            updateAndSend(
-                                newButtons = buttons.copy(l2 = isPressed),
-                                newTriggers = triggers.copy(l2 = trigVal)
-                            )
+                            client.updateTrigger(l2 = trigVal, isL2Pressed = isPressed)
                         }
                     )
                 }
@@ -232,7 +201,7 @@ fun ControllerScreen(
                         sensitivity = effSens,
                         enabled = !isEditMode,
                         onPressChanged = { isPressed ->
-                            updateAndSend(newButtons = buttons.copy(l1 = isPressed))
+                            client.updateButtons { it.copy(l1 = isPressed) }
                         }
                     )
                 }
@@ -258,7 +227,7 @@ fun ControllerScreen(
                         sensitivity = upLayout.sensitivity * buttonSensitivity,
                         fontSize = 18,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newDpad = dpad.copy(up = it)) }
+                        onPressChanged = { isPressed -> client.updateDpad { it.copy(up = isPressed) } }
                     )
                 }
 
@@ -282,7 +251,7 @@ fun ControllerScreen(
                         sensitivity = leftLayout.sensitivity * buttonSensitivity,
                         fontSize = 18,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newDpad = dpad.copy(left = it)) }
+                        onPressChanged = { isPressed -> client.updateDpad { it.copy(left = isPressed) } }
                     )
                 }
 
@@ -306,7 +275,7 @@ fun ControllerScreen(
                         sensitivity = rightLayout.sensitivity * buttonSensitivity,
                         fontSize = 18,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newDpad = dpad.copy(right = it)) }
+                        onPressChanged = { isPressed -> client.updateDpad { it.copy(right = isPressed) } }
                     )
                 }
 
@@ -330,7 +299,7 @@ fun ControllerScreen(
                         sensitivity = downLayout.sensitivity * buttonSensitivity,
                         fontSize = 18,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newDpad = dpad.copy(down = it)) }
+                        onPressChanged = { isPressed -> client.updateDpad { it.copy(down = isPressed) } }
                     )
                 }
 
@@ -352,7 +321,7 @@ fun ControllerScreen(
                         sensitivity = sensitivity * leftStickLayout.sensitivity,
                         enabled = !isEditMode,
                         onMove = { x, y ->
-                            updateAndSend(newAxes = axes.copy(lx = x, ly = y))
+                            client.updateStick(isLeft = true, x = x, y = y)
                         }
                     )
                 }
@@ -374,7 +343,7 @@ fun ControllerScreen(
                         scale = l3Layout.scale,
                         sensitivity = l3Layout.sensitivity * buttonSensitivity,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(l3 = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(l3 = isPressed) } }
                     )
                 }
 
@@ -394,7 +363,7 @@ fun ControllerScreen(
                         scale = r3Layout.scale,
                         sensitivity = r3Layout.sensitivity * buttonSensitivity,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(r3 = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(r3 = isPressed) } }
                     )
                 }
 
@@ -414,7 +383,7 @@ fun ControllerScreen(
                         scale = selectLayout.scale,
                         sensitivity = selectLayout.sensitivity * buttonSensitivity,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(select = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(select = isPressed) } }
                     )
                 }
 
@@ -435,7 +404,7 @@ fun ControllerScreen(
                         scale = psLayout.scale,
                         sensitivity = psLayout.sensitivity * buttonSensitivity,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(ps = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(ps = isPressed) } }
                     )
                 }
 
@@ -455,7 +424,7 @@ fun ControllerScreen(
                         scale = startLayout.scale,
                         sensitivity = startLayout.sensitivity * buttonSensitivity,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(start = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(start = isPressed) } }
                     )
                 }
 
@@ -480,7 +449,7 @@ fun ControllerScreen(
                         sensitivity = effSens,
                         enabled = !isEditMode,
                         onPressChanged = { isPressed ->
-                            updateAndSend(newButtons = buttons.copy(r1 = isPressed))
+                            client.updateButtons { it.copy(r1 = isPressed) }
                         }
                     )
                 }
@@ -506,10 +475,7 @@ fun ControllerScreen(
                         enabled = !isEditMode,
                         onPressChanged = { isPressed ->
                             val trigVal = TouchInputMapper.mapTrigger(if (isPressed) 1f else 0f, effSens)
-                            updateAndSend(
-                                newButtons = buttons.copy(r2 = isPressed),
-                                newTriggers = triggers.copy(r2 = trigVal)
-                            )
+                            client.updateTrigger(r2 = trigVal, isR2Pressed = isPressed)
                         }
                     )
                 }
@@ -532,7 +498,7 @@ fun ControllerScreen(
                         sensitivity = sensitivity * rightStickLayout.sensitivity,
                         enabled = !isEditMode,
                         onMove = { x, y ->
-                            updateAndSend(newAxes = axes.copy(rx = x, ry = y))
+                            client.updateStick(isLeft = false, x = x, y = y)
                         }
                     )
                 }
@@ -557,7 +523,7 @@ fun ControllerScreen(
                         sensitivity = triLayout.sensitivity * buttonSensitivity,
                         fontSize = 22,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(triangle = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(triangle = isPressed) } }
                     )
                 }
 
@@ -580,7 +546,7 @@ fun ControllerScreen(
                         sensitivity = sqLayout.sensitivity * buttonSensitivity,
                         fontSize = 22,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(square = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(square = isPressed) } }
                     )
                 }
 
@@ -603,7 +569,7 @@ fun ControllerScreen(
                         sensitivity = circLayout.sensitivity * buttonSensitivity,
                         fontSize = 22,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(circle = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(circle = isPressed) } }
                     )
                 }
 
@@ -626,7 +592,7 @@ fun ControllerScreen(
                         sensitivity = crossLayout.sensitivity * buttonSensitivity,
                         fontSize = 20,
                         enabled = !isEditMode,
-                        onPressChanged = { updateAndSend(newButtons = buttons.copy(cross = it)) }
+                        onPressChanged = { isPressed -> client.updateButtons { it.copy(cross = isPressed) } }
                     )
                 }
 

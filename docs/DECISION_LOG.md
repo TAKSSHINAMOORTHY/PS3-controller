@@ -165,3 +165,76 @@
        (b) Added stick centering detection (`stickReleasedToCenter = isZeroAxes && !wasZeroAxes`) in `GamepadClient.kt` to immediately bypass the 16ms rate-limiter and transmit `(0f, 0f)` with 0ms latency, followed by a redundant confirmation packet scheduled 30ms later.
        (c) Implemented 350ms stick watchdog timer (`checkStickWatchdog`) running every 100ms in `RPCS3DirectInputAdapter.swift`. If stick input is silent for >350ms, any active stick keys (WASD, Right Stick keys) are auto-released, making stuck drift keys impossible under packet loss or cutscenes.
 - Reason: Guarantees continuous connection stability throughout long cinematic cutscenes and eliminates capacitive touch drift or stuck movement in RPCS3.
+
+## D-021 — Automated USB Hot-Plug / Unplug Detection, Reverse Port-Forwarding Daemon & Zero Socket Leaks
+- Status: Accepted
+- Decision:
+  1. Automated Mac USB/ADB Daemon:
+     - Run a continuous 1.5-second monitor (`setupUsbMonitor()` / `checkAndConfigureUsbAdb()`) in `AppViewModel.swift`. It polls `adb devices` and `adb reverse --list`. If an attached device is present without active reverse forwarding, it automatically runs `adb -s <id> reverse tcp:6000 tcp:6000`.
+     - Dynamically updates UI pill status between `"Active (Port 6000)"`, `"No Phone"`, and `"Unauthorized"`.
+  2. Prevention of Socket Leaks in Companion Server:
+     - Explicitly call `connection.cancel()` on disconnected connections in `ControllerServer.handleClientDisconnect()`.
+     - Process WebSocket opcode 0x8 close frames by invoking `handleClientDisconnect()`.
+     - Prevents dead TCP connections from lingering in `CLOSE_WAIT` and holding port 6000, eliminating `Address already in use` (POSIX error 48) on restarts.
+  3. Android Activity Lifecycle Auto-Reconnection:
+     - Added `onStart()` and `onResume()` in `MainActivity.kt` to trigger `client?.connect()` whenever the activity resumes, preventing stale disconnections when the phone sleeps or locks.
+  4. Dynamic USB State Detection on Android:
+     - Registered a dynamic `BroadcastReceiver` in `MainActivity.kt` for `"android.hardware.usb.action.USB_STATE"`, `ACTION_POWER_CONNECTED`, and `ACTION_POWER_DISCONNECTED`.
+     - When USB is attached, `GamepadClient.onUsbStateChanged(true)` polls `127.0.0.1:6000` and immediately promotes the connection from Wi-Fi to sub-millisecond USB loopback.
+     - When on Wi-Fi in `AUTO_PREFER_USB` mode, `startHeartbeat()` also tests USB loopback every 2 seconds for zero-touch promotion upon USB insertion.
+- Reason: Solves USB disconnection when unplugging/replugging the physical USB cable, enabling fully automatic, zero-config hot-plugging without needing manual terminal commands or app restarts.
+
+## D-022 — Shaped Action Button In-Game Responsiveness, Serial FIFO State Queue & 50ms Pulse Preservation
+- Status: Accepted
+- Decision:
+  1. Serial State Queue Execution:
+     - In `ControllerServer.swift`, chain all incoming state updates sequentially using `lastStateTask = Task { await prevStateTask?.value; await backend.updateState(state) }`.
+     - Completely prevents unstructured Tasks from executing out-of-order across Swift's thread pool, preventing race conditions where button release packets execute before press packets and get permanently stuck down in `activeKeys`.
+  2. Sub-Frame Button Pulse Extension (50ms Minimum Hold Duration):
+     - In `RPCS3DirectInputAdapter.swift`, enforce `minimumButtonHoldDuration = 0.050` (50ms) on all discrete button releases.
+     - When a capacitive touch tap is released in <50ms (typical 15–25ms touchscreen tap), defer the keyup event via `DispatchWorkItem` until 50ms has elapsed.
+     - Guarantees that 30 FPS games (frame time 33.3ms, e.g. Asura's Wrath) and 60 FPS games (e.g. God of War III) never sample `cellPadGetData` between keydown and keyup.
+     - Extended holds (e.g. holding Square for rapid-fire in Asura's Wrath) release immediately (0ms delay) once the user lifts their finger after 50ms.
+  3. Sequence Monotonicity & Key Watchdog Flush:
+     - Track `lastProcessedSeq` in `RPCS3DirectInputAdapter.swift`, rejecting any packet where `seq < lastProcessedSeq`.
+     - Added button key flushing in `checkWatchdog()`. If input goes silent for >500ms, all pending releases and active keys are automatically released, guaranteeing zero stuck buttons.
+  4. Multi-Touch Gesture Consumption on Android:
+     - Added `change.consume()` in the touch tracking loops of `PressablePadButton`, `ShoulderButton`, and `SystemPillButton` in `PS3Buttons.kt`, preventing gesture cancellation when sliding fingers or moving the analog stick.
+- Reason: Resolves the issue where shaped buttons (Triangle, Square, Circle, Cross) visually clicked in the app but failed during intense in-game combat and movement.
+
+## D-023 — Android System Gesture & Sidebar Exclusion and macOS Key Modifier Sanitization
+- Status: Accepted
+- Decision:
+  1. Android Edge Gestures & Sidebar Blocking:
+     - Applied `Modifier.systemGestureExclusion()` to all interactive buttons (`PressablePadButton`, `ShoulderButton`, `SystemPillButton`) and sticks (`JoystickStick`).
+     - Added an edge gesture exclusion listener on `window.decorView` in `MainActivity.kt` (`addOnLayoutChangeListener`) on Android 10+ (API 29+), designating the left 25% and right 25% of the screen as system gesture exclusion zones. This prevents the Android OS from interpreting edge touches/holds (such as holding the ○ Circle button or pressing shoulder buttons) as system back gestures or manufacturer sidebar activations (e.g. Vivo Smart Sidebar / Game Turbo / Edge panels).
+     - Configured `layoutInDisplayCutoutMode = LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES` and added an auto-rehide insets listener in `MainActivity.kt` so transient status/menu bars are automatically dismissed if accidentally peeked.
+  2. macOS Event Modifier Sanitization & Press-And-Hold Character Accent Menu Suppression:
+     - In `RPCS3DirectInputAdapter.swift`, explicitly cleared all modifier flags (`event.flags = []`, except for intentional Shift with L3 alias), ensuring synthetic game keycodes (such as keycode 8 for ○ Circle = C) never carry Command, Control, Option, or Fn flags to the operating system.
+     - Disabled `ApplePressAndHoldEnabled` for `net.rpcs3.rpcs3`, preventing macOS from opening the floating character accent menu bar when letter keys (C, Z, X, V) are held down during gameplay.
+     - Routed synthetic keystrokes directly to RPCS3's PID (`event.postToPid(pid)`) when detected, preventing leakage into the global macOS WindowServer event tap.
+- Reason: Eliminates unwanted system sidebars, status/menu bars, and character accent menus from popping up while playing games.
+
+## D-024 — Sustained Button/Shoulder Hold Streaming, Rapid-Click Edge Restoration, and 360° Real-Joystick Radial Scaling
+- Status: Accepted
+- Decision:
+  1. Sustained Shoulder and Button Hold Architecture:
+     - Root Cause:
+       (a) On macOS, `RPCS3DirectInputAdapter.swift` had a 500ms watchdog that unconditionally flushed all active keys if no new state updates were received.
+       (b) In Jetpack Compose, capacitive touchscreens emit no new pointer events when a finger is held stationary on a button (L1, R1, L2, R2, L3, R3, Cross, Square, etc.).
+       (c) In `ControllerScreen.kt`, local `mutableStateOf` snapshot variables with default parameters caused simultaneous touch callbacks (e.g. thumb moving the left stick while holding L1) to read stale state snapshots and overwrite held buttons back to false.
+     - Fix:
+       (a) Implemented atomic, thread-safe component updaters (`updateButtons`, `updateTrigger`, `updateDpad`, `updateStick`) in `GamepadClient.kt` with synchronized state mutation, preventing multi-touch races.
+       (b) Added an active state streaming coroutine (`checkAndMaintainActiveStreaming`) in `GamepadClient.kt` that streams held state at 40Hz (every 25ms) whenever the controller state is non-neutral, continuously refreshing the Mac watchdog during sustained holds.
+       (c) Extended the Mac silence watchdog threshold in `RPCS3DirectInputAdapter.swift` from 0.5s to 2.0s for buttons and 1.0s for sticks, ensuring network jitter never terminates held buttons.
+  2. Rapid-Click Edge Restoration:
+     - Root Cause: Quick taps (<35ms) were held by delayed `DispatchWorkItem` to ensure 30 FPS / 60 FPS game engine sampling. Rapid subsequent clicks cancelled the delayed release without clearing `activeKeys`, preventing subsequent down transitions from registering and swallowing rapid mashing into a single merged hold.
+     - Fix: In `RPCS3DirectInputAdapter.swift`, if a button press arrives while the key was waiting in `pendingReleases`, cancel the pending release, immediately post `KeyUp`, remove from `activeKeys`, and post `KeyDown`. Fast button clicking now registers every tap at the exact speed of the user's fingers. Reduced `minimumButtonHoldDuration` to 35ms.
+  3. Real-Joystick 360° Uniform Diagonal Sensitivity & Responsive Joystick Curve:
+     - Root Cause: Clamping stick displacement inside a circular boundary caused diagonal components (NE, NW, SE, SW) to max out at $\cos 45^\circ \approx 0.7071$, cutting diagonal speed and sensitivity by ~30% compared to cardinal directions. Sensitivity exponent curve `pow(sens)` dampened responsiveness when sens > 1.0.
+     - Fix:
+       (a) Applied circle-to-square radial projection ($1.0 / \max(|u_x|, |u_y|)$) in `TouchInputMapper.kt`. Pushing into diagonal corners now drives both axes to full $(\pm 1.0, \pm 1.0)$, matching real dual-potentiometer physical joystick behavior.
+       (b) Inverted sensitivity exponent curve to `pow(1.0 / sensitivity)` so increasing sensitivity accelerates response and reaches full deflection earlier.
+       (c) Reduced stick motion dispatch throttling from 16ms to 8ms (~120Hz) in `GamepadClient.kt`.
+       (d) Replaced unbounded Task chaining in `ControllerServer.swift` with a high-priority `AsyncStream<ControllerState>` for sub-millisecond dispatch.
+- Reason: Guarantees genuine analog joystick sensitivity in all 360 degrees, solves button mashing responsiveness, and ensures all shoulder and face button holds work properly.

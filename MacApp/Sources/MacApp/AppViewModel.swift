@@ -26,12 +26,15 @@ public final class AppViewModel: ObservableObject {
     private var backend: GamepadBackend?
     private var retryCount: Int = 0
     private var accessibilityCancellable: AnyCancellable?
+    private var usbMonitorCancellable: AnyCancellable?
+    private var isCheckingUsb: Bool = false
     private var discoveryListener: NWListener?
 
     public init() {
         refreshNetworkInterfaces()
         refreshAccessibilityStatus()
         setupAccessibilityMonitor()
+        setupUsbMonitor()
         silenceLocalKeyBeeps()
     }
 
@@ -137,57 +140,156 @@ public final class AppViewModel: ObservableObject {
         }
     }
 
-    public func configureUsbAdb() {
-        let port = UInt16(portString) ?? 6000
-        Task.detached {
-            let possibleAdbPaths = [
-                "/Users/\(NSUserName())/Library/Android/sdk/platform-tools/adb",
-                "\(NSHomeDirectory())/Library/Android/sdk/platform-tools/adb",
-                "/opt/homebrew/bin/adb",
-                "/usr/local/bin/adb"
-            ]
-            let adbURL = possibleAdbPaths.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+    public func setupUsbMonitor() {
+        stopUsbMonitor()
+        checkAndConfigureUsbAdb(forceLog: false)
 
-            guard let url = adbURL else {
-                await MainActor.run {
+        usbMonitorCancellable = Timer.publish(every: 1.5, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.checkAndConfigureUsbAdb(forceLog: false)
+            }
+    }
+
+    public func stopUsbMonitor() {
+        usbMonitorCancellable?.cancel()
+        usbMonitorCancellable = nil
+    }
+
+    public func configureUsbAdb() {
+        checkAndConfigureUsbAdb(forceLog: true)
+    }
+
+    public func checkAndConfigureUsbAdb(forceLog: Bool = false) {
+        guard !isCheckingUsb else { return }
+        isCheckingUsb = true
+        let port = UInt16(portString) ?? 6000
+
+        guard let url = self.getAdbURL() else {
+            self.isCheckingUsb = false
+            if self.usbStatusText != "ADB Not Found" {
+                self.isUsbAdbConfigured = false
+                self.usbStatusText = "ADB Not Found"
+                self.addLog("[USB] adb CLI not located in standard paths.")
+            }
+            return
+        }
+
+        Task { @MainActor in
+            defer { self.isCheckingUsb = false }
+
+            // Step 1: Detect attached Android devices in background
+            let (devicesStatus, devicesOutput) = await Task.detached {
+                Self.runProcessStatic(executableURL: url, arguments: ["devices"])
+            }.value
+
+            guard devicesStatus == 0 else {
+                if self.isUsbAdbConfigured {
                     self.isUsbAdbConfigured = false
-                    self.usbStatusText = "ADB Not Found"
-                    self.addLog("[USB] adb CLI not located in standard paths.")
+                    self.usbStatusText = "Error"
+                    self.addLog("[USB] ADB check failed: \(devicesOutput)")
                 }
                 return
             }
 
-            let process = Process()
-            process.executableURL = url
-            process.arguments = ["reverse", "tcp:\(port)", "tcp:\(port)"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
+            let lines = devicesOutput.components(separatedBy: .newlines)
+            var activeDeviceIds: [String] = []
+            var hasUnauthorized = false
 
-            do {
-                try process.run()
-                process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                await MainActor.run {
-                    if process.terminationStatus == 0 {
-                        self.isUsbAdbConfigured = true
-                        self.usbStatusText = "Active (Port \(port))"
-                        self.addLog("[USB] Configured ADB reverse tcp:\(port) -> tcp:\(port) successfully.")
-                    } else {
-                        self.isUsbAdbConfigured = false
-                        self.usbStatusText = "No Phone"
-                        self.addLog("[USB] ADB reverse note: \(output)")
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty || trimmed.hasPrefix("List of devices") || trimmed.hasPrefix("*") {
+                    continue
+                }
+                let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+                if parts.count >= 2 {
+                    if parts[1] == "device" {
+                        activeDeviceIds.append(parts[0])
+                    } else if parts[1] == "unauthorized" {
+                        hasUnauthorized = true
                     }
                 }
-            } catch {
-                await MainActor.run {
+            }
+
+            if activeDeviceIds.isEmpty {
+                let newStatus = hasUnauthorized ? "Unauthorized" : "No Phone"
+                if self.isUsbAdbConfigured {
+                    self.isUsbAdbConfigured = false
+                    self.usbStatusText = newStatus
+                    self.addLog("[USB] Phone disconnected from USB.")
+                } else if self.usbStatusText != newStatus {
+                    self.usbStatusText = newStatus
+                }
+                return
+            }
+
+            // Step 2: Check if reverse port forwarding is already active
+            let (_, reverseOutput) = await Task.detached {
+                Self.runProcessStatic(executableURL: url, arguments: ["reverse", "--list"])
+            }.value
+
+            let reverseTarget = "tcp:\(port) tcp:\(port)"
+            let isAlreadyConfigured = reverseOutput.contains(reverseTarget)
+
+            if !isAlreadyConfigured || forceLog {
+                var allSuccess = true
+                var lastErr = ""
+                for devId in activeDeviceIds {
+                    let (revStatus, revOut) = await Task.detached {
+                        Self.runProcessStatic(executableURL: url, arguments: ["-s", devId, "reverse", "tcp:\(port)", "tcp:\(port)"])
+                    }.value
+                    if revStatus != 0 {
+                        allSuccess = false
+                        lastErr = revOut
+                    }
+                }
+
+                if allSuccess {
+                    let wasConfigured = self.isUsbAdbConfigured
+                    self.isUsbAdbConfigured = true
+                    self.usbStatusText = "Active (Port \(port))"
+                    if !wasConfigured || forceLog {
+                        self.addLog("[USB] Phone attached! Automated ADB reverse tcp:\(port) -> tcp:\(port) established.")
+                    }
+                } else {
                     self.isUsbAdbConfigured = false
                     self.usbStatusText = "Error"
-                    self.addLog("[USB] Error running ADB reverse: \(error.localizedDescription)")
+                    self.addLog("[USB] ADB reverse error: \(lastErr)")
+                }
+            } else {
+                if !self.isUsbAdbConfigured {
+                    self.isUsbAdbConfigured = true
+                    self.usbStatusText = "Active (Port \(port))"
                 }
             }
+        }
+    }
+
+    private func getAdbURL() -> URL? {
+        let possibleAdbPaths = [
+            "/Users/\(NSUserName())/Library/Android/sdk/platform-tools/adb",
+            "\(NSHomeDirectory())/Library/Android/sdk/platform-tools/adb",
+            "/opt/homebrew/bin/adb",
+            "/usr/local/bin/adb"
+        ]
+        return possibleAdbPaths.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+    }
+
+    nonisolated private static func runProcessStatic(executableURL: URL, arguments: [String]) -> (Int32, String) {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return (process.terminationStatus, output)
+        } catch {
+            return (-1, error.localizedDescription)
         }
     }
 
@@ -318,7 +420,8 @@ public final class AppViewModel: ObservableObject {
                     self.addLog("Client connected from \(peer)")
                 case .failed(let err):
                     self.addLog("Server error: \(err)")
-                    if err.contains("Address already in use") && self.retryCount < 2 {
+                    let isAddrInUse = err.contains("Address already in use") || err.contains("48") || err.contains("POSIXErrorCode")
+                    if isAddrInUse && self.retryCount < 3 {
                         self.retryCount += 1
                         self.serverStatusText = "Port releasing, retrying..."
                         self.addLog("Port \(port) still releasing, retrying in 400ms (attempt \(self.retryCount))...")

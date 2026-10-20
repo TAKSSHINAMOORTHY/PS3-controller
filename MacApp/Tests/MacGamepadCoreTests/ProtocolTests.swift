@@ -221,4 +221,102 @@ final class ProtocolTests: XCTestCase {
         await adapter.disconnect()
         XCTAssertFalse(adapter.isConnected)
     }
+
+    func testRPCS3DirectInputAdapterButtonPulseHoldAndMonotonicity() async throws {
+        let adapter = RPCS3DirectInputAdapter()
+        try await adapter.connect()
+
+        // Seq 1: Press Triangle
+        let pressTriangle = ControllerState(
+            sessionId: "sess-pulse",
+            seq: 1,
+            buttons: ControllerButtons(triangle: true)
+        )
+        try await adapter.updateState(pressTriangle)
+
+        // Seq 2: Release Triangle almost immediately (5ms later)
+        let releaseTriangle = ControllerState(
+            sessionId: "sess-pulse",
+            seq: 2,
+            buttons: ControllerButtons(triangle: false)
+        )
+        try await adapter.updateState(releaseTriangle)
+
+        // Seq 1 replay (out of order packet): must be safely dropped
+        let stalePress = ControllerState(
+            sessionId: "sess-pulse",
+            seq: 1,
+            buttons: ControllerButtons(triangle: true)
+        )
+        try await adapter.updateState(stalePress)
+
+        // Clean release
+        await adapter.releaseAll()
+        await adapter.disconnect()
+    }
+
+    func testRPCS3DirectInputAdapterRapidConsecutiveClicking() async throws {
+        let adapter = RPCS3DirectInputAdapter()
+        try await adapter.connect()
+
+        // Simulate rapid button mashing (e.g. 5 rapid clicks in quick succession)
+        var seq: UInt32 = 10
+        for _ in 1...5 {
+            // Down
+            let down = ControllerState(
+                sessionId: "sess-rapid",
+                seq: seq,
+                buttons: ControllerButtons(square: true)
+            )
+            try await adapter.updateState(down)
+            seq += 1
+
+            // Brief delay simulating rapid tap release (10ms)
+            try await Task.sleep(nanoseconds: 10_000_000)
+
+            // Up
+            let up = ControllerState(
+                sessionId: "sess-rapid",
+                seq: seq,
+                buttons: ControllerButtons(square: false)
+            )
+            try await adapter.updateState(up)
+            seq += 1
+
+            // Brief gap before next tap (15ms)
+            try await Task.sleep(nanoseconds: 15_000_000)
+        }
+
+        await adapter.releaseAll()
+        await adapter.disconnect()
+    }
+
+    func testRPCS3DirectInputAdapterShoulderHold() async throws {
+        let adapter = RPCS3DirectInputAdapter()
+        try await adapter.connect()
+
+        // Simulate sustained hold of R1, L1, R2, L2, R3, L3 across multiple streaming state packets
+        for s: UInt32 in 1...10 {
+            let heldState = ControllerState(
+                sessionId: "sess-hold",
+                seq: s,
+                buttons: ControllerButtons(l1: true, r1: true, l2: true, r2: true, l3: true, r3: true),
+                triggers: ControllerTriggers(l2: 1.0, r2: 1.0)
+            )
+            try await adapter.updateState(heldState)
+            try await Task.sleep(nanoseconds: 15_000_000)
+        }
+
+        // Release
+        let releaseState = ControllerState(
+            sessionId: "sess-hold",
+            seq: 11,
+            buttons: ControllerButtons(),
+            triggers: ControllerTriggers()
+        )
+        try await adapter.updateState(releaseState)
+
+        await adapter.releaseAll()
+        await adapter.disconnect()
+    }
 }

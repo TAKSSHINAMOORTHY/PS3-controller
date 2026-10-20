@@ -1,6 +1,9 @@
 package com.antigravity.ps3controller
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -16,6 +19,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.antigravity.ps3controller.network.ConnectionStatus
 import com.antigravity.ps3controller.network.GamepadClient
 import com.antigravity.ps3controller.ui.ControllerScreen
 import com.antigravity.ps3controller.ui.SettingsDialog
@@ -26,11 +30,56 @@ class MainActivity : ComponentActivity() {
     private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            if (action == "android.hardware.usb.action.USB_STATE") {
+                val isConnected = intent.getBooleanExtra("connected", false)
+                client?.onUsbStateChanged(isConnected)
+            } else if (action == Intent.ACTION_POWER_CONNECTED) {
+                client?.onUsbStateChanged(true)
+            } else if (action == Intent.ACTION_POWER_DISCONNECTED) {
+                client?.onUsbStateChanged(false)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+
+        // On Android 10+ (API 29+), exclude the left and right screen edges from system back gestures and sidebars
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.decorView.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+                val width = right - left
+                val height = bottom - top
+                if (width > 0 && height > 0) {
+                    val exclusionWidth = (width * 0.25f).toInt().coerceAtMost(350)
+                    val leftRect = android.graphics.Rect(0, 0, exclusionWidth, height)
+                    val rightRect = android.graphics.Rect(width - exclusionWidth, 0, width, height)
+                    try {
+                        window.decorView.systemGestureExclusionRects = listOf(leftRect, rightRect)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        // Automatically re-hide transient system bars if revealed by edge swipes
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
+            val isVisible = insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            if (isVisible) {
+                window.decorView.postDelayed({
+                    hideSystemBars()
+                }, 1000)
+            }
+            insets
+        }
 
         // Keep CPU and Wi-Fi radio at high performance so cutscenes never drop connectivity
         try {
@@ -50,6 +99,19 @@ class MainActivity : ComponentActivity() {
             wifiLock?.apply {
                 setReferenceCounted(false)
                 acquire()
+            }
+        } catch (_: Exception) {}
+
+        try {
+            val filter = IntentFilter().apply {
+                addAction("android.hardware.usb.action.USB_STATE")
+                addAction(Intent.ACTION_POWER_CONNECTED)
+                addAction(Intent.ACTION_POWER_DISCONNECTED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(usbReceiver, filter)
             }
         } catch (_: Exception) {}
 
@@ -176,6 +238,19 @@ class MainActivity : ComponentActivity() {
         insetsController.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Auto-reconnect when activity becomes visible
+        client?.connect()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (client?.status?.value == ConnectionStatus.DISCONNECTED) {
+            client?.connect()
+        }
+    }
+
     override fun onStop() {
         super.onStop()
         // Neutralize and disconnect to prevent sticking inputs
@@ -184,6 +259,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try {
+            unregisterReceiver(usbReceiver)
+        } catch (_: Exception) {}
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
             if (wifiLock?.isHeld == true) wifiLock?.release()

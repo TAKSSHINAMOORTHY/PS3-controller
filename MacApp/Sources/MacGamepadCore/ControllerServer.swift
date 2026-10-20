@@ -25,11 +25,22 @@ public final class ControllerServer: @unchecked Sendable {
     private var timeoutTimer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "com.antigravity.controllerserver", qos: .userInteractive)
     private let lock = NSRecursiveLock()
+    private let stateContinuation: AsyncStream<ControllerState>.Continuation
+    private var stateProcessingTask: Task<Void, Never>?
 
     public init(port: UInt16 = 6000, backend: GamepadBackend) {
         self.port = port
         self.backend = backend
         self.validator = ProtocolValidator()
+
+        let (stream, continuation) = AsyncStream.makeStream(of: ControllerState.self)
+        self.stateContinuation = continuation
+        self.stateProcessingTask = Task.detached(priority: .high) { [weak backend] in
+            for await state in stream {
+                guard let backend = backend else { break }
+                try? await backend.updateState(state)
+            }
+        }
     }
 
     public func start() throws {
@@ -214,10 +225,7 @@ public final class ControllerServer: @unchecked Sendable {
         do {
             try validator.validateAndNormalizeState(&state)
             onStateReceived?(state)
-
-            Task {
-                try? await backend.updateState(state)
-            }
+            stateContinuation.yield(state)
         } catch {
             onError?("Dropped invalid state: \(error)")
         }
@@ -227,6 +235,7 @@ public final class ControllerServer: @unchecked Sendable {
         lock.lock()
         guard activeConnection === connection else {
             lock.unlock()
+            connection.cancel()
             return
         }
         activeConnection = nil
@@ -234,6 +243,7 @@ public final class ControllerServer: @unchecked Sendable {
         validator.reset()
         lock.unlock()
 
+        connection.cancel()
         updateStatus(.listening(port: self.port))
         onError?("Client disconnected: \(reason)")
 
@@ -288,6 +298,7 @@ public final class ControllerServer: @unchecked Sendable {
                     results.append(data.subdata(in: payloadOffset..<(payloadOffset + payloadLen)))
                 }
             } else if opcode == 0x8 { // Connection close frame
+                handleClientDisconnect(connection: connection, reason: "Client sent close frame")
                 break
             } else if opcode == 0x9 { // Ping frame
                 // Respond immediately with Pong frame (opcode 0xA) to keep socket alive

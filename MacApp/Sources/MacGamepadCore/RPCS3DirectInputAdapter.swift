@@ -29,8 +29,13 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
     }
 
     private var lastStickActivity: Date = .distantPast
+    private var lastStateActivity: Date = .distantPast
+    private var lastProcessedSeq: UInt32 = 0
+    private var lastButtonPressTime: [CGKeyCode: Date] = [:]
+    private var pendingReleases: [CGKeyCode: DispatchWorkItem] = [:]
+    private let minimumButtonHoldDuration: TimeInterval = 0.035 // 35ms guarantees recognition across 30 FPS / 60 FPS game frames without swallowing rapid clicks
     private var stickWatchdogTimer: DispatchSourceTimer?
-    private let watchdogQueue = DispatchQueue(label: "com.antigravity.stickwatchdog", qos: .userInteractive)
+    private let watchdogQueue = DispatchQueue(label: "com.antigravity.watchdog", qos: .userInteractive)
 
     private let stickKeys: Set<CGKeyCode> = [
         13, 1, 0, 2,        // Left Stick (W, S, A, D)
@@ -42,7 +47,7 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
         lock.withLock {
             isConnected = true
             refreshRPCS3Pids()
-            startStickWatchdog()
+            startWatchdog()
         }
         if !Self.isAccessibilityPermissionGranted {
             print("[RPCS3Adapter] ⚠️ WARNING: Accessibility permission is NOT granted. CGEvent taps require Accessibility in System Settings > Privacy & Security > Accessibility.")
@@ -52,7 +57,7 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
     }
 
     public func disconnect() async {
-        stopStickWatchdog()
+        stopWatchdog()
         await releaseAll()
         lock.withLock {
             isConnected = false
@@ -62,66 +67,145 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
 
     public func releaseAll() async {
         lock.withLock {
+            for (_, workItem) in pendingReleases {
+                workItem.cancel()
+            }
+            pendingReleases.removeAll()
             for key in activeKeys {
                 postRawKeyEvent(code: key, down: false)
             }
             activeKeys.removeAll()
+            lastButtonPressTime.removeAll()
+            lastProcessedSeq = 0
         }
     }
 
     public func updateState(_ state: ControllerState) async throws {
         lock.withLock {
+            if state.seq > 0 && state.seq < lastProcessedSeq {
+                // Drop stale out-of-order sequence packet
+                return
+            }
+            if state.seq > 0 {
+                lastProcessedSeq = state.seq
+            }
+
             refreshRPCS3PidsIfNeeded()
+            let now = Date()
+            lastStateActivity = now
 
             let isStickActive = abs(state.axes.lx) > 0.15 || abs(state.axes.ly) > 0.15 ||
                                 abs(state.axes.rx) > 0.15 || abs(state.axes.ry) > 0.15
             if isStickActive {
-                lastStickActivity = Date()
+                lastStickActivity = now
             }
 
             let desired = calculateDesiredKeys(for: state)
 
+            // Rapid-Click Edge Restoration:
+            // If a key is desired (finger down), but was waiting in pendingReleases (user clicked and immediately clicked again):
+            // Cancel the delayed workItem, immediately post KeyUp so RPCS3 registers the release edge,
+            // and remove from activeKeys so that it re-presses below as an independent click!
+            for key in desired {
+                if let workItem = pendingReleases[key] {
+                    workItem.cancel()
+                    pendingReleases.removeValue(forKey: key)
+                    postRawKeyEvent(code: key, down: false)
+                    activeKeys.remove(key)
+                }
+            }
+
+            // Keys to press: desired but not in activeKeys
             let toPress = desired.subtracting(activeKeys)
-            let toRelease = activeKeys.subtracting(desired)
+
+            // Keys to release: activeKeys not in desired, and not already scheduled for pending release
+            let candidatesToRelease = activeKeys.subtracting(desired)
+            let toRelease = candidatesToRelease.filter { pendingReleases[$0] == nil }
 
             for key in toPress {
+                lastButtonPressTime[key] = now
                 postRawKeyEvent(code: key, down: true)
-            }
-            for key in toRelease {
-                postRawKeyEvent(code: key, down: false)
+                activeKeys.insert(key)
             }
 
-            activeKeys = desired
+            for key in toRelease {
+                if stickKeys.contains(key) {
+                    // Sticks release immediately with 0ms delay for crisp centering
+                    postRawKeyEvent(code: key, down: false)
+                    activeKeys.remove(key)
+                } else {
+                    // Buttons enforce minimum hold duration (35ms) so 30 FPS / 60 FPS game engines never miss quick taps
+                    let pressTime = lastButtonPressTime[key] ?? .distantPast
+                    let elapsed = now.timeIntervalSince(pressTime)
+
+                    if elapsed < minimumButtonHoldDuration {
+                        let remaining = minimumButtonHoldDuration - elapsed
+                        let workItem = DispatchWorkItem { [weak self] in
+                            guard let self = self else { return }
+                            self.lock.withLock {
+                                guard self.pendingReleases[key] != nil else { return }
+                                self.pendingReleases.removeValue(forKey: key)
+                                self.postRawKeyEvent(code: key, down: false)
+                                self.activeKeys.remove(key)
+                            }
+                        }
+                        pendingReleases[key] = workItem
+                        watchdogQueue.asyncAfter(deadline: .now() + remaining, execute: workItem)
+                    } else {
+                        pendingReleases[key]?.cancel()
+                        pendingReleases.removeValue(forKey: key)
+                        postRawKeyEvent(code: key, down: false)
+                        activeKeys.remove(key)
+                    }
+                }
+            }
         }
     }
 
-    private func startStickWatchdog() {
-        stopStickWatchdog()
+    private func startWatchdog() {
+        stopWatchdog()
         let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
         timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
         timer.setEventHandler { [weak self] in
-            self?.checkStickWatchdog()
+            self?.checkWatchdog()
         }
         self.stickWatchdogTimer = timer
         timer.resume()
     }
 
-    private func stopStickWatchdog() {
+    private func stopWatchdog() {
         stickWatchdogTimer?.cancel()
         stickWatchdogTimer = nil
     }
 
-    private func checkStickWatchdog() {
+    private func checkWatchdog() {
         lock.withLock {
             let now = Date()
-            // If stick has been silent / inactive for > 350ms, auto-center and release any stuck stick keys
-            if now.timeIntervalSince(lastStickActivity) > 0.35 {
+            // 1. Stick Watchdog: If stick has been silent / inactive for > 1000ms (1.0s), auto-center and release any stuck stick keys
+            if now.timeIntervalSince(lastStickActivity) > 1.0 {
                 let stuckStickKeys = activeKeys.intersection(stickKeys)
                 if !stuckStickKeys.isEmpty {
                     for key in stuckStickKeys {
                         postRawKeyEvent(code: key, down: false)
                         activeKeys.remove(key)
                     }
+                }
+            }
+
+            // 2. Button & Connection Watchdog: If input stream has been silent for > 2000ms (2.0s), cleanly flush pending releases and all stuck keys
+            if now.timeIntervalSince(lastStateActivity) > 2.0 {
+                for (key, workItem) in pendingReleases {
+                    workItem.cancel()
+                    postRawKeyEvent(code: key, down: false)
+                    activeKeys.remove(key)
+                }
+                pendingReleases.removeAll()
+
+                if !activeKeys.isEmpty {
+                    for key in activeKeys {
+                        postRawKeyEvent(code: key, down: false)
+                    }
+                    activeKeys.removeAll()
                 }
             }
         }
@@ -201,21 +285,30 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
     }
 
     private func refreshRPCS3Pids() {
-        let apps = NSWorkspace.shared.runningApplications
-        let pids = apps.compactMap { app -> pid_t? in
-            if app.localizedName?.lowercased().contains("rpcs3") == true ||
-               app.bundleIdentifier?.lowercased().contains("rpcs3") == true ||
-               app.executableURL?.lastPathComponent.lowercased().contains("rpcs3") == true {
-                return app.processIdentifier
-            }
-            return nil
+        var pids = Set<pid_t>()
+
+        let targetApps = NSRunningApplication.runningApplications(withBundleIdentifier: "net.rpcs3.rpcs3")
+        for app in targetApps {
+            pids.insert(app.processIdentifier)
         }
-        self.cachedPids = pids
+
+        let allApps = NSWorkspace.shared.runningApplications
+        for app in allApps {
+            guard let bundleId = app.bundleIdentifier, !bundleId.hasPrefix("com.apple.") else { continue }
+            let isRPCS3 = bundleId.lowercased() == "net.rpcs3.rpcs3" ||
+                          app.executableURL?.lastPathComponent.lowercased() == "rpcs3" ||
+                          app.localizedName?.lowercased() == "rpcs3"
+            if isRPCS3 {
+                pids.insert(app.processIdentifier)
+            }
+        }
+
+        self.cachedPids = Array(pids)
         self.lastPidScan = Date()
     }
 
     private func refreshRPCS3PidsIfNeeded() {
-        if Date().timeIntervalSince(lastPidScan) > 2.0 {
+        if cachedPids.isEmpty || Date().timeIntervalSince(lastPidScan) > 2.0 {
             refreshRPCS3Pids()
         }
     }
@@ -223,24 +316,20 @@ public final class RPCS3DirectInputAdapter: GamepadBackend, @unchecked Sendable 
     private func postRawKeyEvent(code: CGKeyCode, down: Bool) {
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: code, keyDown: down) else { return }
 
-        let frontApp = NSWorkspace.shared.frontmostApplication
-        let isFrontNameRPCS3 = frontApp?.localizedName?.lowercased().contains("rpcs3") == true ||
-                               frontApp?.bundleIdentifier?.lowercased().contains("rpcs3") == true
-        let isRPCS3Front = isFrontNameRPCS3 || cachedPids.contains(frontApp?.processIdentifier ?? 0)
-
-        // If RPCS3 is the active focused window, post directly to the system HID event tap
-        // so Qt / Vulkan / MoltenVK game window receives physical-grade keyboard events immediately.
-        if isRPCS3Front {
-            event.post(tap: .cghidEventTap)
-        } else if !cachedPids.isEmpty {
-            for pid in cachedPids {
-                event.postToPid(pid)
-            }
+        // Sanitize event flags: game key presses should NEVER trigger macOS system gestures/shortcuts
+        // such as Fn+C (Control Center/Menu Bar), Cmd+C, Ctrl+C, or character accent menus.
+        if code == 56 { // Left Shift (L3 alias)
+            event.flags = down ? .maskShift : []
         } else {
-            let myBundleId = Bundle.main.bundleIdentifier ?? "com.antigravity.ps3companion"
-            if frontApp?.bundleIdentifier != myBundleId {
-                event.post(tap: .cghidEventTap)
-            }
+            event.flags = []
+        }
+
+        // Strict process isolation: deliver key events EXCLUSIVELY to RPCS3's process event queue.
+        // Never post to the global macOS system event tap (.cghidEventTap), which would leak
+        // keystrokes into macOS WindowServer and trigger system sidebars, docks, and menu bars.
+        refreshRPCS3PidsIfNeeded()
+        for pid in cachedPids {
+            event.postToPid(pid)
         }
     }
 }

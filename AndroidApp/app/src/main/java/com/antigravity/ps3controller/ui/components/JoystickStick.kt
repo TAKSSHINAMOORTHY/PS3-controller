@@ -5,6 +5,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -86,6 +87,7 @@ fun JoystickStick(
     Box(
         modifier = modifier
             .size(size)
+            .systemGestureExclusion()
             .then(inputModifier)
     ) {
         Canvas(modifier = Modifier.size(size)) {

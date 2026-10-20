@@ -86,7 +86,7 @@ class GamepadClient(
     private var lastSentTime = 0L
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
+        .connectTimeout(2, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(0, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
@@ -97,10 +97,10 @@ class GamepadClient(
             TransportPreference.FORCE_USB -> Pair(usbHost, "USB")
             TransportPreference.FORCE_WIFI -> Pair(resolveWifiHost(), "Wi-Fi")
             TransportPreference.AUTO_PREFER_USB -> {
-                // Probe USB (127.0.0.1:serverPort) first with reliable 400ms socket probe
+                // Probe USB (127.0.0.1:serverPort) first with reliable 250ms socket probe
                 val isUsbAvailable = try {
                     java.net.Socket().use { s ->
-                        s.connect(java.net.InetSocketAddress(usbHost, serverPort), 400)
+                        s.connect(java.net.InetSocketAddress(usbHost, serverPort), 250)
                         true
                     }
                 } catch (_: Exception) {
@@ -118,12 +118,12 @@ class GamepadClient(
 
     private fun resolveWifiHost(): String {
         // 1. Probe currently configured wifiHost (e.g. 192.168.1.24)
-        if (isHostReachable(wifiHost, serverPort, 500)) {
+        if (isHostReachable(wifiHost, serverPort, 400)) {
             return wifiHost
         }
 
         // 2. Auto-discover Mac companion via UDP broadcast on port 6001
-        val discovered = discoverHostViaUDP(6001, 700)
+        val discovered = discoverHostViaUDP(6001, 600)
         if (discovered != null) {
             Log.i("GamepadClient", "Auto-discovered Mac bridge via UDP: $discovered")
             return discovered
@@ -181,42 +181,105 @@ class GamepadClient(
 
         scope.launch {
             val (resolvedHost, transportName) = resolveTargetHost()
-            _activeHost.value = resolvedHost
-            _activeTransport.value = transportName
+            connectToHost(resolvedHost, transportName)
+        }
+    }
 
-            val url = "ws://$resolvedHost:$serverPort"
-            Log.i("GamepadClient", "Connecting via $transportName to $url...")
-            val request = Request.Builder().url(url).build()
+    private fun connectToHost(resolvedHost: String, transportName: String) {
+        _activeHost.value = resolvedHost
+        _activeTransport.value = transportName
 
-            webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.i("GamepadClient", "WebSocket onOpen via $transportName! Sending PairRequest...")
-                    _status.value = ConnectionStatus.PAIRING
-                    // Send pair request
-                    val pairReq = PairRequest(
-                        clientName = clientName,
-                        clientId = "android-${System.currentTimeMillis() % 10000}",
-                        protocolVersion = 1,
-                        pairingCode = "1234"
-                    )
-                    webSocket.send(json.encodeToString(pairReq))
+        val url = "ws://$resolvedHost:$serverPort"
+        Log.i("GamepadClient", "Connecting via $transportName to $url...")
+        val request = Request.Builder().url(url).build()
+
+        webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.i("GamepadClient", "WebSocket onOpen via $transportName! Sending PairRequest...")
+                _status.value = ConnectionStatus.PAIRING
+                // Send pair request
+                val pairReq = PairRequest(
+                    clientName = clientName,
+                    clientId = "android-${System.currentTimeMillis() % 10000}",
+                    protocolVersion = 1,
+                    pairingCode = "1234"
+                )
+                webSocket.send(json.encodeToString(pairReq))
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.i("GamepadClient", "onMessage: $text")
+                handleIncomingMessage(text)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.w("GamepadClient", "onClosed: $reason ($code)")
+                handleDisconnect("Closed: $reason ($code)")
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e("GamepadClient", "onFailure: ${t.localizedMessage}", t)
+                handleDisconnect("Failed: ${t.localizedMessage ?: "Unknown error"}")
+            }
+        })
+    }
+
+    private fun disconnectForTransportSwitch() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        activeStateStreamJob?.cancel()
+        activeStateStreamJob = null
+        val ws = webSocket
+        webSocket = null
+        activeSessionId = null
+        try {
+            ws?.close(1000, "Transport switch")
+        } catch (_: Exception) {}
+    }
+
+    fun onUsbStateChanged(isAttached: Boolean) {
+        Log.i("GamepadClient", "onUsbStateChanged: isAttached=$isAttached, pref=$transportPreference, activeTransport=${_activeTransport.value}")
+        if (transportPreference == TransportPreference.FORCE_WIFI) {
+            return
+        }
+
+        if (isAttached) {
+            // USB plugged in!
+            scope.launch {
+                var usbAvailable = false
+                // Check if ADB reverse port forwarding is ready (give Mac up to 2.4s to configure)
+                for (attempt in 1..8) {
+                    delay(300)
+                    if (isHostReachable(usbHost, serverPort, 200)) {
+                        usbAvailable = true
+                        break
+                    }
                 }
 
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    Log.i("GamepadClient", "onMessage: $text")
-                    handleIncomingMessage(text)
+                if (usbAvailable) {
+                    Log.i("GamepadClient", "USB loopback confirmed reachable after plug event!")
+                    if (_activeTransport.value != "USB" || _status.value != ConnectionStatus.CONNECTED) {
+                        Log.i("GamepadClient", "Switching to low-latency USB transport now...")
+                        disconnectForTransportSwitch()
+                        connectToHost(usbHost, "USB")
+                    }
                 }
-
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    Log.w("GamepadClient", "onClosed: $reason ($code)")
-                    handleDisconnect("Closed: $reason ($code)")
+            }
+        } else {
+            // USB unplugged!
+            if (_activeTransport.value == "USB") {
+                Log.i("GamepadClient", "USB physically unplugged while on USB transport!")
+                scope.launch {
+                    disconnectForTransportSwitch()
+                    if (transportPreference == TransportPreference.AUTO_PREFER_USB) {
+                        Log.i("GamepadClient", "Falling back to Wi-Fi after USB unplug...")
+                        connect()
+                    } else {
+                        _status.value = ConnectionStatus.DISCONNECTED
+                        _errorMessage.value = "USB cable unplugged"
+                    }
                 }
-
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e("GamepadClient", "onFailure: ${t.localizedMessage}", t)
-                    handleDisconnect("Failed: ${t.localizedMessage ?: "Unknown error"}")
-                }
-            })
+            }
         }
     }
 
@@ -239,11 +302,101 @@ class GamepadClient(
         }
     }
 
+    private val stateLock = Any()
+    private var currentState = ControllerState.neutral()
+    private var activeStateStreamJob: Job? = null
     private var pendingState: ControllerState? = null
     private var trailingSendJob: Job? = null
     private var lastSentButtons = ControllerButtons()
     private var lastSentDpad = ControllerDPad()
     private var lastSentAxes = ControllerAxes()
+
+    fun updateButtons(updater: (ControllerButtons) -> ControllerButtons) {
+        val stateToSend: ControllerState
+        synchronized(stateLock) {
+            val updated = updater(currentState.buttons)
+            currentState = currentState.copy(buttons = updated)
+            stateToSend = currentState
+        }
+        dispatchState(stateToSend, forceImmediate = true)
+        checkAndMaintainActiveStreaming()
+    }
+
+    fun updateDpad(updater: (ControllerDPad) -> ControllerDPad) {
+        val stateToSend: ControllerState
+        synchronized(stateLock) {
+            val updated = updater(currentState.dpad)
+            currentState = currentState.copy(dpad = updated)
+            stateToSend = currentState
+        }
+        dispatchState(stateToSend, forceImmediate = true)
+        checkAndMaintainActiveStreaming()
+    }
+
+    fun updateStick(isLeft: Boolean, x: Float, y: Float) {
+        val stateToSend: ControllerState
+        val isCenter: Boolean
+        val significantChange: Boolean
+        synchronized(stateLock) {
+            val oldAxes = currentState.axes
+            val newAxes = if (isLeft) {
+                currentState.axes.copy(lx = x, ly = y)
+            } else {
+                currentState.axes.copy(rx = x, ry = y)
+            }
+            currentState = currentState.copy(axes = newAxes)
+            stateToSend = currentState
+            isCenter = (x == 0f && y == 0f)
+            val dx = if (isLeft) kotlin.math.abs(newAxes.lx - oldAxes.lx) else kotlin.math.abs(newAxes.rx - oldAxes.rx)
+            val dy = if (isLeft) kotlin.math.abs(newAxes.ly - oldAxes.ly) else kotlin.math.abs(newAxes.ry - oldAxes.ry)
+            significantChange = (dx > 0.02f || dy > 0.02f)
+        }
+        dispatchState(stateToSend, forceImmediate = isCenter || significantChange)
+        checkAndMaintainActiveStreaming()
+    }
+
+    fun updateTrigger(l2: Float? = null, r2: Float? = null, isL2Pressed: Boolean? = null, isR2Pressed: Boolean? = null) {
+        val stateToSend: ControllerState
+        synchronized(stateLock) {
+            val newL2 = l2 ?: currentState.triggers.l2
+            val newR2 = r2 ?: currentState.triggers.r2
+            val newTriggers = currentState.triggers.copy(l2 = newL2, r2 = newR2)
+            val btnL2 = isL2Pressed ?: (newL2 > 0.20f)
+            val btnR2 = isR2Pressed ?: (newR2 > 0.20f)
+            val newButtons = currentState.buttons.copy(l2 = btnL2, r2 = btnR2)
+            currentState = currentState.copy(triggers = newTriggers, buttons = newButtons)
+            stateToSend = currentState
+        }
+        dispatchState(stateToSend, forceImmediate = true)
+        checkAndMaintainActiveStreaming()
+    }
+
+    private fun checkAndMaintainActiveStreaming() {
+        synchronized(stateLock) {
+            val nonNeutral = !isNeutralState(currentState)
+            if (nonNeutral) {
+                if (activeStateStreamJob == null) {
+                    activeStateStreamJob = scope.launch {
+                        while (isActive && _status.value == ConnectionStatus.CONNECTED) {
+                            delay(25) // Stream held state at 40Hz (every 25ms) to keep server watchdog refreshed
+                            val stateToSend = synchronized(stateLock) {
+                                if (isNeutralState(currentState)) null else currentState
+                            }
+                            if (stateToSend != null) {
+                                sendRawStatePacket(stateToSend)
+                            } else {
+                                break
+                            }
+                        }
+                        activeStateStreamJob = null
+                    }
+                }
+            } else {
+                activeStateStreamJob?.cancel()
+                activeStateStreamJob = null
+            }
+        }
+    }
 
     private fun isNeutralState(state: ControllerState): Boolean {
         val b = state.buttons
@@ -258,7 +411,22 @@ class GamepadClient(
                t.l2 == 0f && t.r2 == 0f
     }
 
-    fun sendState(state: ControllerState) {
+    private fun sendRawStatePacket(state: ControllerState) {
+        val ws = webSocket ?: return
+        val session = activeSessionId ?: return
+        if (_status.value != ConnectionStatus.CONNECTED) return
+
+        val now = System.currentTimeMillis()
+        val seq = sequenceNumber.incrementAndGet()
+        val outbound = state.copy(sessionId = session, seq = seq, timestamp = now)
+        try {
+            val payload = json.encodeToString(outbound)
+            ws.send(payload)
+            lastSentTime = now
+        } catch (_: Exception) {}
+    }
+
+    fun dispatchState(state: ControllerState, forceImmediate: Boolean = false) {
         val ws = webSocket ?: return
         val session = activeSessionId ?: return
         if (_status.value != ConnectionStatus.CONNECTED) return
@@ -271,23 +439,17 @@ class GamepadClient(
         val wasZeroAxes = lastSentAxes.lx == 0f && lastSentAxes.ly == 0f && lastSentAxes.rx == 0f && lastSentAxes.ry == 0f
         val stickReleasedToCenter = isZeroAxes && !wasZeroAxes
 
-        // Button transitions, neutral / release states, or stick center releases must be transmitted immediately
-        // without throttling so buttons and sticks respond instantaneously with 0ms latency.
-        if (buttonsChanged || stickReleasedToCenter || isNeutral || timeSinceLast >= 16) {
+        // Button transitions, rapid taps, neutral releases, or stick center releases transmit immediately (0ms latency).
+        // Analog stick motion updates are throttled to 8ms (~120Hz) for ultra-fluid stick response.
+        if (forceImmediate || buttonsChanged || stickReleasedToCenter || isNeutral || timeSinceLast >= 8) {
             trailingSendJob?.cancel()
             trailingSendJob = null
             pendingState = null
-            lastSentTime = now
             lastSentButtons = state.buttons
             lastSentDpad = state.dpad
             lastSentAxes = state.axes
 
-            val seq = sequenceNumber.incrementAndGet()
-            val outbound = state.copy(sessionId = session, seq = seq, timestamp = now)
-            try {
-                val payload = json.encodeToString(outbound)
-                ws.send(payload)
-            } catch (_: Exception) {}
+            sendRawStatePacket(state)
 
             // Send secondary redundant center confirmation after 30ms to guarantee zero stick drift under packet loss
             if (stickReleasedToCenter) {
@@ -306,23 +468,32 @@ class GamepadClient(
             // Buffer latest motion state so trailing final position is never lost
             pendingState = state
             if (trailingSendJob == null) {
-                val delayMs = (16 - timeSinceLast).coerceIn(1, 16)
+                val delayMs = (8 - timeSinceLast).coerceIn(1, 8)
                 trailingSendJob = scope.launch {
                     delay(delayMs)
                     val toSend = pendingState
                     pendingState = null
                     trailingSendJob = null
                     if (toSend != null) {
-                        sendState(toSend)
+                        dispatchState(toSend, forceImmediate = false)
                     }
                 }
             }
         }
     }
 
+    fun sendState(state: ControllerState) {
+        synchronized(stateLock) {
+            currentState = state
+        }
+        dispatchState(state, forceImmediate = false)
+        checkAndMaintainActiveStreaming()
+    }
+
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
+            var probeUsbCounter = 0
             while (isActive && _status.value == ConnectionStatus.CONNECTED) {
                 delay(1000)
                 val session = activeSessionId ?: continue
@@ -334,6 +505,21 @@ class GamepadClient(
                     ws.send(json.encodeToString(hb))
                     lastSentTime = now
                 } catch (_: Exception) {}
+
+                // If currently connected via Wi-Fi and AUTO_PREFER_USB is active:
+                // Periodically probe USB loopback to seamlessly promote to USB when plugged in
+                if (_activeTransport.value == "Wi-Fi" && transportPreference == TransportPreference.AUTO_PREFER_USB) {
+                    probeUsbCounter++
+                    if (probeUsbCounter >= 2) {
+                        probeUsbCounter = 0
+                        if (isHostReachable(usbHost, serverPort, 150)) {
+                            Log.i("GamepadClient", "USB loopback detected while on Wi-Fi! Auto-switching to USB...")
+                            disconnectForTransportSwitch()
+                            connectToHost(usbHost, "USB")
+                            break
+                        }
+                    }
+                }
             }
         }
     }
@@ -343,6 +529,8 @@ class GamepadClient(
     private fun handleDisconnect(reason: String) {
         heartbeatJob?.cancel()
         heartbeatJob = null
+        activeStateStreamJob?.cancel()
+        activeStateStreamJob = null
         activeSessionId = null
         _status.value = ConnectionStatus.DISCONNECTED
         _errorMessage.value = reason
@@ -350,9 +538,9 @@ class GamepadClient(
 
         if (!isExplicitDisconnect) {
             scope.launch {
-                delay(300)
+                delay(400)
                 if (_status.value == ConnectionStatus.DISCONNECTED && !isExplicitDisconnect) {
-                    Log.i("GamepadClient", "Auto-reconnecting to ws://$serverHost:$serverPort...")
+                    Log.i("GamepadClient", "Auto-reconnecting to server...")
                     connect()
                 }
             }
@@ -363,6 +551,8 @@ class GamepadClient(
         isExplicitDisconnect = true
         heartbeatJob?.cancel()
         heartbeatJob = null
+        activeStateStreamJob?.cancel()
+        activeStateStreamJob = null
 
         // Send a neutral state packet before closing
         val session = activeSessionId

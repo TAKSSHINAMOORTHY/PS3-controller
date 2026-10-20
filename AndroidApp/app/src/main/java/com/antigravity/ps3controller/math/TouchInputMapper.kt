@@ -47,14 +47,23 @@ object TouchInputMapper {
         if (adjustedDist <= 0.001f) return StickResult(0f, 0f)
 
         val effectiveSens = if (sensitivity <= 0f) 1.0f else sensitivity
-        val curvedDist = if (effectiveSens == 1.0f) adjustedDist else adjustedDist.pow(effectiveSens)
+        // Responsive sensitivity curve: sensitivity > 1.0 increases responsiveness and reaches full deflection earlier
+        val curvedDist = if (effectiveSens == 1.0f) adjustedDist else adjustedDist.pow(1.0f / effectiveSens)
 
         // Unit vector along drag direction
         val unitX = dx / rawDist
         val unitY = dy / rawDist
 
-        val rawX = unitX * curvedDist
-        val rawY = unitY * curvedDist
+        // Circle-to-square / radial scaling to emulate a real physical joystick.
+        // In physical dual-potentiometer joysticks, pushing into diagonal corners (NE, NW, SE, SW)
+        // drives both X and Y potentiometers to their full limits (1.0, 1.0).
+        // Scaling by 1.0 / max(|unitX|, |unitY|) maps circular touch travel into full square coordinates
+        // uniformly across all 360 degrees without sluggish diagonal deadening.
+        val maxComponent = max(kotlin.math.abs(unitX), kotlin.math.abs(unitY))
+        val radialScale = if (maxComponent > 0.0001f) 1.0f / maxComponent else 1.0f
+
+        val rawX = unitX * radialScale * curvedDist
+        val rawY = unitY * radialScale * curvedDist
 
         val mappedX = if (kotlin.math.abs(rawX) < 0.015f) 0f else rawX.coerceIn(-1.0f, 1.0f)
         val mappedY = if (kotlin.math.abs(rawY) < 0.015f) 0f else rawY.coerceIn(-1.0f, 1.0f)

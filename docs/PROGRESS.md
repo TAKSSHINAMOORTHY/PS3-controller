@@ -156,3 +156,114 @@
   * macOS release bundle build & launch: SUCCESS (`/Applications/PS3ControllerCompanion.app`)
   * Continuous idle connection stability: VERIFIED (0 ping drops, 0 disconnects across 60+ seconds of idle time)
 
+## Automated USB Hot-Plug / Unplug Detection & Zero-Config Loopback
+- Date: 2026-10-19
+- Issue: USB connection stopped working whenever the USB cable was unplugged and replugged. Android could not reconnect to the Mac over USB without manual intervention.
+- Root Cause:
+  1. Ephemeral ADB Reverse: ADB reverse forward rules (`adb reverse tcp:6000 tcp:6000`) are wiped by the ADB daemon when the USB cable is detached. When the cable is plugged back in, ADB does NOT restore them automatically. The Mac companion only ran `configureUsbAdb()` once at startup.
+  2. Leaked Sockets in `CLOSE_WAIT`: In `ControllerServer.swift`, `handleClientDisconnect()` never called `connection.cancel()`, leaving dead sockets in `CLOSE_WAIT` holding port 6000 and causing `Address already in use` (POSIX error 48) on restarts. Opcode 0x8 close frames were also unhandled.
+  3. Android Activity Lifecycle Disconnect: `MainActivity.kt` called `client?.disconnect()` in `onStop()`, which set `isExplicitDisconnect = true`. Because `MainActivity` lacked `onStart()` or `onResume()`, waking the phone or resuming the app left the controller permanently disconnected.
+  4. Missing USB Hot-Plug Detection on Phone: Android had no listener for USB cable attachment/detachment. When USB was unplugged, if it fell back to Wi-Fi, it stayed on Wi-Fi indefinitely and never detected when the USB cable was plugged back in.
+- Fix:
+  1. Added automated 1.5s background ADB monitor (`setupUsbMonitor()` / `checkAndConfigureUsbAdb()`) in `AppViewModel.swift`. It polls `adb devices` and `adb reverse --list`, automatically configuring `adb -s <id> reverse tcp:6000 tcp:6000` whenever an attached phone is detected without active forwarding.
+  2. Added explicit `connection.cancel()` in `handleClientDisconnect()` and opcode 0x8 handling in `ControllerServer.swift`, eliminating all `CLOSE_WAIT` socket leaks.
+  3. Added `onStart()` and `onResume()` in `MainActivity.kt` ensuring the client auto-reconnects as soon as the app resumes or wakes.
+  4. Registered a dynamic `BroadcastReceiver` in `MainActivity.kt` for `android.hardware.usb.action.USB_STATE`, `ACTION_POWER_CONNECTED`, and `ACTION_POWER_DISCONNECTED`.
+  5. Implemented `onUsbStateChanged(isAttached: Boolean)` in `GamepadClient.kt`. When plugged in, Android probes `127.0.0.1:6000` with retries and immediately switches from Wi-Fi to sub-millisecond USB loopback. Added a 2-second background loopback check in `startHeartbeat()` while on Wi-Fi in `AUTO_PREFER_USB` mode. Reduced socket timeout from 5s to 2s to eliminate reconnection hangs.
+- Tests passed:
+  * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
+  * macOS Core tests: 11/11 passed (`swift test`)
+  * macOS release bundle compilation & codesign: SUCCESS (`./scripts/build-macos.sh`)
+  * Android debug build: SUCCESS (`./gradlew assembleDebug`)
+  * Companion installation to `/Applications/PS3ControllerCompanion.app`: SUCCESS
+  * Android installation & launch via ADB: SUCCESS (`./scripts/install-android.sh`)
+  * Live USB hot-plug empirical test: Cleared `adb reverse --remove tcp:6000`; Mac automated monitor restored `UsbFfs tcp:6000 tcp:6000` within 2 seconds; Android client re-paired (`accepted`) and established continuous connection.
+
+## Shaped Buttons In-Game Registration & Concurrency Pulse Fix
+- Date: 2026-10-19
+- Issue: In RPCS3 gameplay (e.g. *Asura's Wrath* [BLJM60409]), shaped action buttons (Triangle, Square, Circle, Cross) clicked fine visually in the app and companion UI, but failed to register in-game attacks/actions during gameplay, particularly when moving the analog sticks simultaneously.
+- Root Cause:
+  1. Unordered Async Task Concurrency on Mac Companion: In `ControllerServer.swift`, incoming 60Hz state packets spawned unordered Swift concurrency tasks (`Task { try? await backend.updateState(state) }`). When moving the analog stick, 60 packets/sec flooded the server; thread pool execution caused button release events to be processed *before* button press events, leaving button keys permanently stuck down or inverted in `activeKeys`.
+  2. Sub-Frame Capacitive Tap Dropping: Touchscreen button taps (15–25ms) were shorter than the PS3 game engine's 30 FPS polling interval (33.3ms for `cellPadGetData`). Taps that started and ended between consecutive frame polls were completely missed by the RPCS3 emulated game engine.
+  3. Stale Replay Packets: No monotonic sequence filter existed in `RPCS3DirectInputAdapter`, allowing out-of-order network packets to corrupt button states.
+  4. Missing Button Release Watchdog: While sticks had a 350ms watchdog, button keys had no release watchdog if a network packet was lost.
+  5. Multi-touch gesture consumption in Android UI: Moving the analog stick simultaneously risked gesture cancellation on the shaped buttons without explicit consumption.
+- Fix:
+  1. Serial Task Chaining in `ControllerServer.swift`: Added `lastStateTask: Task<Void, Never>?` chaining to serialize all backend state updates in strict FIFO order, preventing task races.
+  2. Monotonic Sequence Filtering: In `RPCS3DirectInputAdapter.swift`, dropped stale/out-of-order state packets (`state.seq <= lastProcessedSeq`).
+  3. 50ms Minimum Pulse Duration: Implemented `minimumButtonHoldDuration = 0.050` (50ms) hold preservation via `DispatchWorkItem` on `watchdogQueue`. Quick touchscreen taps (<50ms) are guaranteed to hold across at least 2 full game engine frames at 30 FPS (3+ frames at 60 FPS). Sustained holds (>50ms, such as rapid-fire Square) release immediately upon finger lift.
+  4. Button Watchdog & Stale Flush: Enhanced `checkWatchdog()` in `RPCS3DirectInputAdapter.swift` to flush all pending button releases and stale active keys after 500ms of silence.
+  5. Touch Event Consumption: Added `change.consume()` across all button touch tracking loops in `PS3Buttons.kt`.
+  6. Unit Tests: Added `testRPCS3DirectInputAdapterButtonPulseHoldAndMonotonicity` in `ProtocolTests.swift`. All 12 Swift tests passed.
+- Tests passed:
+  * Swift unit tests: 12/12 passed (`swift test` in `MacApp`)
+  * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
+  * E2E Resilience suite: 6/6 passed (`python3 tests/test_resilience.py`)
+  * macOS Release bundle build & deploy: SUCCESS (`/Applications/PS3ControllerCompanion.app`)
+  * Android build & deploy: SUCCESS (`adb install -r app-debug.apk`)
+  * Live USB pairing & communication: VERIFIED (`accepted`, 60Hz, PID 13249)
+
+## System Gesture, Edge Sidebar & Menu Bar Blocking
+- Date: 2026-10-19
+- Issue: When playing games, tapping or holding edge buttons (especially ○ Circle / O button on the far right) caused the phone's side bar (e.g. Smart Sidebar / Game Turbo / Edge panels) and the system menu / status bar to show up, interrupting gameplay.
+- Root Cause:
+  1. On modern Android devices, the left and right screen edges are reserved by the OS for system back gestures and manufacturer sidebars. Because the ○ (Circle) button is located near the right edge of the landscape screen, touching or holding it triggered edge swipe and navigation gestures.
+  2. Transient system bars were configured without gesture exclusion rects, allowing edge touches to reveal the status bar and navigation bar.
+  3. On macOS, `CGEvent` instances inherited system modifier flags from the hardware state, which could trigger system-level shortcuts (like Control Center or character accent menus) when letters (such as 'C') were held down.
+- Fix:
+  1. Applied `Modifier.systemGestureExclusion()` across all Compose buttons (`PressablePadButton`, `ShoulderButton`, `SystemPillButton`) and sticks (`JoystickStick`) in `PS3Buttons.kt` and `JoystickStick.kt`.
+  2. Added dynamic full-edge gesture exclusion in `MainActivity.kt` using `window.decorView.systemGestureExclusionRects`, designating the left 25% and right 25% screen edges as excluded from OS back gestures and sidebars.
+  3. Configured `layoutInDisplayCutoutMode = LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES` and added an auto-rehide insets listener in `MainActivity.kt` to immediately re-hide transient bars.
+  4. Sanitized `event.flags = []` in `RPCS3DirectInputAdapter.swift` so game key events never carry system modifier flags, and disabled macOS character accent popups for RPCS3 via `defaults write net.rpcs3.rpcs3 ApplePressAndHoldEnabled -bool false`.
+- Tests passed:
+  * Swift unit tests: 12/12 passed (`swift test` in `MacApp`)
+  * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
+  * Android APK build & install: SUCCESS (`adb install -r app-debug.apk` onto `10BD12000X00011`)
+  * macOS Companion release build & install: SUCCESS (`/Applications/PS3ControllerCompanion.app`, PID 15576)
+  * Live connection: ESTABLISHED and active on port 6000 over USB loopback
+
+## macOS System Sidebar & Menu Bar Leakage Fix (Strict Process Isolation)
+- Date: 2026-10-19
+- Issue: When playing games on the Mac, pressing or holding controller buttons (specifically the ○ Circle / O button) caused the Mac's side bar and top menu bar to show up, interrupting gameplay.
+- Root Cause:
+  1. Rogue Apple Daemon Injection: In `RPCS3DirectInputAdapter.swift`, `refreshRPCS3Pids()` checked `app.localizedName?.lowercased().contains("rpcs3")`. On macOS, this inadvertently matched Apple's system daemon `com.apple.SafariPlatformSupport.Helper` (which has localized name `"AutoFill (RPCS3)"`). Keystrokes were being delivered directly into Apple's AutoFill helper, popping up macOS AutoFill suggestion menu bars and sidebars whenever keys like `C` (Circle button) were pressed or held!
+  2. Global WindowServer Event Tap Leakage: `postRawKeyEvent` was calling `event.post(tap: .cghidEventTap)`. Posting to `.cghidEventTap` broadcasts hardware-level keyboard events to macOS WindowServer. In macOS Full Screen, WindowServer intercepts unhandled keystrokes and reveals the top macOS Menu Bar and sidebars (Stage Manager / Dock / Control Center).
+- Fix:
+  1. Strict RPCS3 Process Targeting: Filtered `refreshRPCS3Pids()` with `NSRunningApplication.runningApplications(withBundleIdentifier: "net.rpcs3.rpcs3")` and explicitly excluded all `com.apple.*` daemons.
+  2. Pure Process Event Routing (`postToPid`): Delivered key events EXCLUSIVELY to RPCS3's process event queue (`event.postToPid(pid)`). Completely eliminated `.cghidEventTap` broadcasting. Keystrokes now bypass macOS WindowServer entirely and are delivered solely to RPCS3.
+  3. Sanitized modifier flags (`event.flags = []`), guaranteeing game keypresses can never trigger macOS system shortcuts.
+- Tests passed:
+  * Swift unit tests: 12/12 passed (`swift test` in `MacApp`)
+  * macOS Release bundle build & install: SUCCESS (`/Applications/PS3ControllerCompanion.app`, PID 16759)
+  * Live USB pairing & communication: VERIFIED (`accepted`, 60Hz, PID 16759)
+
+## Sustained Button & Shoulder Hold, Rapid Fast Clicking & 360° Real-Joystick Sensitivity Fix
+- Date: 2026-10-20
+- Issue:
+  1. Buttons L1, L2, L3, R1, R2, R3 (and all action buttons) worked as short clicks instead of holds when pressed and held.
+  2. Rapid fast clicking of buttons was throttled and lagged behind, merging fast clicks into single long holds.
+  3. Joysticks had slower input latency and diagonal directions (NE, NW, SE, SW) suffered from reduced sensitivity (~30% less travel) compared to cardinal directions.
+- Root Cause:
+  1. Hold Failure: Capacitive touchscreens emit no touch events while holding stationary fingers; the Mac companion's 500ms watchdog unconditionally flushed active keys when the input stream paused. Additionally, Compose state reads with default parameters across multi-touch callbacks caused simultaneous stick dragging to overwrite held button flags.
+  2. Rapid Click Swallowing: The 50ms hold preservation mechanism retained keys in `activeKeys` while a delayed release was pending. When a rapid subsequent click arrived, it cancelled the delayed release but did not clear `activeKeys`, causing subsequent keydown events to be ignored.
+  3. Diagonal Stick Deadening: Clamping stick displacement inside a circular boundary caused diagonal components to cap at $\cos 45^\circ \approx 0.7071$. The sensitivity power curve dampened center responsiveness when sensitivity > 1.0. Unbounded Task chaining in `ControllerServer.swift` added thread scheduling latency.
+- Fix:
+  1. Sustained Hold Architecture:
+     - Implemented atomic thread-safe state updaters (`updateButtons`, `updateTrigger`, `updateDpad`, `updateStick`) in `GamepadClient.kt` with synchronized state mutation, eliminating multi-touch race conditions in `ControllerScreen.kt`.
+     - Added an active state streaming loop in `GamepadClient.kt` that streams held state at 40Hz (every 25ms) whenever the controller is non-neutral, keeping the Mac watchdog fresh indefinitely while buttons are held.
+     - Extended the Mac silence watchdog to 2.0s for buttons and 1.0s for sticks in `RPCS3DirectInputAdapter.swift`.
+  2. Rapid-Click Edge Restoration:
+     - In `RPCS3DirectInputAdapter.swift`, added immediate KeyUp edge restoration when a new press arrives for a key that is waiting in `pendingReleases`. Adjusted minimum hold duration to 35ms.
+     - Every rapid click now cleanly produces a distinct KeyUp/KeyDown cycle in RPCS3 without lag or coalescing.
+  3. 360° Real-Joystick Radial Scaling & High-Speed Dispatch:
+     - Applied circle-to-square radial scaling ($1.0 / \max(|u_x|, |u_y|)$) in `TouchInputMapper.kt` so diagonal corners reach full $(\pm 1.0, \pm 1.0)$ matching real dual-potentiometer joystick behavior.
+     - Inverted sensitivity curve to `pow(1.0 / sensitivity)` so higher sensitivity accelerates response and reaches full deflection earlier.
+     - Reduced motion dispatch throttling from 16ms to 8ms (~120Hz).
+     - Replaced unbounded Task chaining in `ControllerServer.swift` with a high-priority `AsyncStream<ControllerState>`.
+- Tests passed:
+  * Swift unit tests: 14/14 passed (`swift test` in `MacApp`)
+  * Android unit tests: 18/18 passed (`./gradlew testDebugUnitTest`)
+  * E2E Resilience suite: 6/6 passed (`python3 tests/test_resilience.py`)
+  * Android debug build: SUCCESS (`./gradlew assembleDebug`, APK: `app-debug.apk`)
+  * macOS Companion release build & install: SUCCESS (`/Applications/PS3ControllerCompanion.app`, PID 8322)
+
