@@ -266,4 +266,6 @@
   * E2E Resilience suite: 6/6 passed (`python3 tests/test_resilience.py`)
   * Android debug build: SUCCESS (`./gradlew assembleDebug`, APK: `app-debug.apk`)
   * macOS Companion release build & install: SUCCESS (`/Applications/PS3ControllerCompanion.app`, PID 8322)
+  * Android installation & launch via ADB: SUCCESS (`./scripts/install-android.sh`, Device: `10BD12000X00011`)
+  * Live USB pairing & communication: VERIFIED (`accepted`, Port 6000 loopback, Session: `E3F46AA0...`)
 
